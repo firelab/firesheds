@@ -80,8 +80,17 @@ int main(int argc, char *argv[])
     string extension;
     size_t pos;
     int type;
+    string dataPath;
 
-    string dataPath = argv[1];
+    if (argc > 1)
+    {
+        dataPath = argv[1];
+    }
+    else
+    {
+        printf("Error: need path to shapefiles as an argument");
+        return EXIT_FAILURE;
+    }
 
     if ((dataPath.back() != '/') || (dataPath.back() != '\\'))
     {
