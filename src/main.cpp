@@ -89,10 +89,10 @@ int main(int argc, char *argv[])
     else
     {
         printf("Error: need path to shapefiles as an argument");
-        return EXIT_FAILURE;
+         return EXIT_FAILURE;
     }
 
-    if ((dataPath.back() != '/') || (dataPath.back() != '\\'))
+    if ((dataPath.back() != '/') && (dataPath.back() != '\\'))
     {
         dataPath.push_back('/');
     }
