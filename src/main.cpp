@@ -65,7 +65,7 @@ bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBo
 void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shapeFilePath, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData);
 void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
-void FillWfipsData(WfipsData& wfipsData, std::string dataPath);
+int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
 void CreateFireShedDB(FireshedData& fireshedData, WfipsData& wfipsData);
 
 static const double cellHalfWidth = 1000; // 1 km
@@ -74,13 +74,13 @@ int main(int argc, char *argv[])
 {
     DIR *dir;
     struct dirent *ent;
-    vector<string> shapeFileNameList;
-    vector<string> shapeFilePathList;
-    string fileName;
-    string extension;
-    size_t pos;
-    int type;
-    string dataPath;
+
+    string fileName = "";
+    string extension = "";
+    size_t pos = -1;
+    int type = 0;
+    string dataPath = "";
+    int rc = 0;
 
     if (argc > 1)
     {
@@ -92,10 +92,13 @@ int main(int argc, char *argv[])
          return EXIT_FAILURE;
     }
 
-    if ((dataPath.back() != '/') && (dataPath.back() != '\\'))
+    if ((dataPath.back() != '/') && (dataPath.back() !='\\'))
     {
         dataPath.push_back('/');
     }
+
+    vector<string> shapeFileNameList;
+    vector<string> shapeFilePathList;
 
     if ((dir = opendir(argv[1])) != nullptr)
     {
@@ -125,12 +128,23 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    if (shapeFilePathList.size() < 1)
+    {
+        printf("Error: No shapefiles found, exiting program\n");
+        return EXIT_FAILURE;
+    }
+
     const int num_shape_files = shapeFilePathList.size();
 
     GDALAllRegister();
    
     WfipsData wfipsData;
-    FillWfipsData(wfipsData, dataPath);
+    rc = FillWfipsData(wfipsData, dataPath);
+    if (rc != 0)
+    {
+        printf("Error: WFIPS data loading failed, exiting program\n");
+        return EXIT_FAILURE;
+    }
     printf("WFIPS data populated\n");
 
     MultiPolygonData multiPolygonData;
@@ -149,7 +163,8 @@ int main(int argc, char *argv[])
     }
     else
     {
-        omp_set_num_threads(23);
+        numCores = 36;
+        omp_set_num_threads(numCores);
     }
 
     // Parallel
@@ -287,7 +302,7 @@ bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBo
     return ((innerBoundingBox.MinX >= outerBoundingBox.MinX) && (innerBoundingBox.MaxX <= outerBoundingBox.MaxX) && (innerBoundingBox.MinY >= outerBoundingBox.MinY) && (innerBoundingBox.MaxY <= outerBoundingBox.MaxY));
 }
 
-void FillWfipsData(WfipsData& wfipsData, std::string dataPath)
+int FillWfipsData(WfipsData& wfipsData, std::string dataPath)
 {
     int rc = wfipsData.gridData.LoadData((const char*)dataPath.c_str());
     std::printf("WFIPS grid data initialized\n");
@@ -326,6 +341,7 @@ void FillWfipsData(WfipsData& wfipsData, std::string dataPath)
             wfipsData.cellCentroids.push_back(cellCenteroid);
         }
     }
+    return rc;
 }
 
 void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData)
@@ -403,7 +419,7 @@ void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, Fireshe
         if ((multipolygonIndex > 0) && (multipolygonIndex % 10000 == 0))
         {
             currentProgress = (multipolygonIndex / (num_polygons * 1.0)) * 100.00;
-            printf("file %s\n    is %4.2f percent complete\n", shapeFileName.c_str(), currentProgress);
+            printf("file %s\n    is %4.2f percent complete\n", shapeFileName.c_str());
         }
     }
 
