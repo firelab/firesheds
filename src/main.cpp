@@ -490,8 +490,6 @@ void CreateFireShedDB(FireshedData& fireshedData, WfipsData& wfipsData)
     //        cellCenterX = cellMinX + cellHalfWidth;
     //        cellCenterY = cellMinY + cellHalfWidth;
 
-    //       
-
     //        rc = sqlite3_bind_double(stmt, sqlite3_bind_parameter_index(stmt, ":x"), coords.x);
     //        rc = sqlite3_bind_double(stmt, sqlite3_bind_parameter_index(stmt, ":y"), coords.y);
 
@@ -510,9 +508,7 @@ void CreateFireShedDB(FireshedData& fireshedData, WfipsData& wfipsData)
     //        coords.y = p.getY();
 
     //        wfipscellSelfCoords[wfipsCellIndex] = coords;
-
     //        
-
     //        rc = sqlite3_step(stmt);
     //        rc = sqlite3_reset(stmt);
     //    }
