@@ -63,7 +63,7 @@ struct FireshedData
 bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBoundingBox);
 
 void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shapeFilePath, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData);
-void FillFireOriginData(const int shapeFileIndex, vector<string>& shapeFileNameList, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData);
+void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 void FillWfipsData(WfipsData& wfipsData, std::string dataPath);
 void CreateFireShedDB(FireshedData& fireshedData, WfipsData& wfipsData);
@@ -149,7 +149,7 @@ int main(int argc, char *argv[])
     {
         ReadFromShapeFileToMemory(shapeFileIndex, shapeFilePathList[shapeFileIndex], fireshedData, wfipsData, multiPolygonData);
         //printf("polygon and multiPolygon vectors populated for file\n    %s\n", shapeFilePathList[shapeFileIndex].c_str());
-        FillFireOriginData(shapeFileIndex, shapeFilePathList, fireshedData, wfipsData, multiPolygonData);
+        FillFireOriginData(shapeFileIndex, shapeFilePathList[shapeFileIndex], fireshedData, wfipsData, multiPolygonData);
     }
     // End Parallel
    
@@ -193,6 +193,14 @@ void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shape
     SBoundingBox sBoundingBox;
     //Polygon Shapefile
 
+    enum
+    {
+        fire_number = 0,
+        acres = 7,
+        x_val = 8,
+        y_val = 9
+    };
+
     if (wkbFlatten(LayerGeometryType) == wkbPolygon)
     {
         OGRFeature *poFeature;
@@ -210,19 +218,19 @@ void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shape
             {
                 OGRFieldDefn *poFieldDefn = poFDefn->GetFieldDefn(iField);
 
-                if (iField == 7)
-                {
-                    sizeInAcres = poFeature->GetFieldAsInteger(iField);
-                }
-                if (iField == 0)
+                if (iField == fire_number)
                 {
                     fireNumber = poFeature->GetFieldAsInteger(iField);
                 }
-                else if (iField == 8)
+                if (iField == acres)
+                {
+                    sizeInAcres = poFeature->GetFieldAsInteger(iField);
+                }
+                else if (iField == x_val)
                 {
                     x = poFeature->GetFieldAsDouble(iField);
                 }
-                else if (iField == 9)
+                else if (iField == y_val)
                 {
                     y = poFeature->GetFieldAsDouble(iField);
                 }
@@ -311,7 +319,7 @@ void FillWfipsData(WfipsData& wfipsData, std::string dataPath)
     }
 }
 
-void FillFireOriginData(const int shapeFileIndex, vector<string>& shapeFileNameList, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData)
+void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData)
 {
     int lastError = 0;
     bool isInBoundingBox = false;
@@ -386,7 +394,7 @@ void FillFireOriginData(const int shapeFileIndex, vector<string>& shapeFileNameL
         if ((multipolygonIndex > 0) && (multipolygonIndex % 10000 == 0))
         {
             currentProgress = (multipolygonIndex / (num_polygons * 1.0)) * 100.00;
-            printf("file %s\n    is %4.2f percent complete\n", shapeFileNameList[shapeFileIndex].c_str(), currentProgress);
+            printf("file %s\n    is %4.2f percent complete\n", shapeFileName.c_str(), currentProgress);
         }
     }
 
@@ -396,7 +404,7 @@ void FillFireOriginData(const int shapeFileIndex, vector<string>& shapeFileNameL
     multiPolygonData.boundingBoxes[shapeFileIndex].clear();
     multiPolygonData.polygons[shapeFileIndex].clear();
 
-    printf("file %s\n    is 100 percent complete\n", shapeFileNameList[shapeFileIndex].c_str(), currentProgress);
+    printf("file %s\n    is 100 percent complete\n", shapeFileName.c_str(), currentProgress);
 }
 
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)

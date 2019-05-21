@@ -239,11 +239,11 @@ int CWfipsGrid::LoadData(string fileName, WFIPS_GRID_TYPE gridType)
 	}
 	CPLFree(panScanline);
 	err = m_wfipsSRS[0].SetWellKnownGeogCS("NAD83");
-	CPLStringList papszPrj5070 = NULL;
+    CPLStringList papszPrj5070;;
 	papszPrj5070.AddString(MapESRIProjStrings[1]);
 	err = m_wfipsSRS[1].importFromESRI(papszPrj5070);
 	//err = m_wfipsSRS[1].SetWellKnownGeogCS("EPSG:5070");
-	CPLStringList papszPrj3857 = NULL;
+    CPLStringList papszPrj3857;
 	papszPrj3857.AddString(MapESRIProjStrings[2]);
 	err = m_wfipsSRS[2].importFromESRI(papszPrj3857);
 
@@ -362,11 +362,11 @@ bool CWfipsGrid::Create(WFIPS_GRID_TYPE gridType, int numRows, int numCols, doub
 	m_dNodataVal = ndValue;
 
 	int err = m_wfipsSRS[0].SetWellKnownGeogCS("NAD83");
-	CPLStringList papszPrj5070 = NULL;
+	CPLStringList papszPrj5070;
 	papszPrj5070.AddString(MapESRIProjStrings[1]);
 	err = m_wfipsSRS[1].importFromESRI(papszPrj5070);
 	//err = m_wfipsSRS[1].SetWellKnownGeogCS("EPSG:5070");
-	CPLStringList papszPrj3857 = NULL;
+	CPLStringList papszPrj3857;
 	papszPrj3857.AddString(MapESRIProjStrings[2]);
 	err = m_wfipsSRS[2].importFromESRI(papszPrj3857);
 	//err = m_wfipsSRS[2].SetWellKnownGeogCS("EPSG:3857");
