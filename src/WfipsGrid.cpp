@@ -370,8 +370,6 @@ bool CWfipsGrid::Create(WFIPS_GRID_TYPE gridType, int numRows, int numCols, doub
 	papszPrj3857.AddString(MapESRIProjStrings[2]);
 	err = m_wfipsSRS[2].importFromESRI(papszPrj3857);
 	//err = m_wfipsSRS[2].SetWellKnownGeogCS("EPSG:3857");
-	papszPrj5070 = NULL;
-	papszPrj5070.AddString(MapESRIProjStrings[1]);
 	err = m_oSrcSRS.importFromESRI(papszPrj5070);
 	//coordinate transformations
 	m_wfipsCT[0] = OGRCreateCoordinateTransformation(&m_wfipsSRS[0], &m_oSrcSRS);
