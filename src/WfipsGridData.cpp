@@ -1,12 +1,7 @@
-//#include <..\stdafx.h>
-
 #include "WfipsGridData.h"
 
-#include "spatialite.h"
 #include "gdal_priv.h"
 #include "ogrsf_frmts.h"
-
-//#include "wfips_data.h"
 
 char *WGL_LAYERNAMES[WGL_END] =
 {
