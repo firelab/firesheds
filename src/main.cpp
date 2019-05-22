@@ -12,6 +12,7 @@
 #include <set>
 #include <vector>
 #include <unordered_map>
+#include <cstdio>
 
 #include "sqlite3.h"
 #include "WfipsGridData.h"
@@ -19,6 +20,7 @@
 using std::multimap;
 using std::string;
 using std::vector;
+using std::printf;
 
 /***************************************************************************
 // Data Structures
@@ -27,23 +29,27 @@ using std::vector;
 //data structure to hold bounding box
 struct SBoundingBox
 {
-    double MaxX;
-    double MaxY;
-    double MinX;
-    double MinY;
+    double maxX;
+    double maxY;
+    double minX;
+    double minY;
 };
 
 struct MultiPolygonData
 {
+    OGRSpatialReference spatialReference;
     vector<vector<OGRMultiPolygon>> polygons;
     vector<vector<SBoundingBox>> boundingBoxes;
 };
 
 struct WfipsData
 {
+    OGRSpatialReference spatialReference;
     std::vector<OGRPoint> cellCentroids;
     std::vector<SBoundingBox> cellBoundingBoxes;
     CWfipsGridData gridData;
+
+    double GeoTransform[6];
 
     int numRows = -1;
     int numCols = -1;
@@ -54,15 +60,14 @@ struct FireshedData
     //vector<int> fireNumbers;
     vector<vector<int>> fireOriginCells;
     vector<unordered_map<int, int>> wfipscellsToFireOriginsForSingleFile;
-    multiset<pair<int, int>> totalWfipscellsToFireOrigins;
-    vector<vector<int>> originCellsForWfipscellRowIndex;
-    unordered_map<int, int> rowIndexToWfipsCell;
-    vector<vector<int>> frequenciesForWfipscellRowIndex;
+    vector<vector<int>> originCellsForWfipscellVectorRowIndex;
+    unordered_map<int, int> vectorRowIndexToWfipsCell;
+    vector<vector<int>> frequenciesForWfipscellVectorRowIndex;
 };
 
 bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBoundingBox);
 
-void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shapeFilePath, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData);
+void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shapeFilePath, const std::string shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData);
 void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
@@ -138,7 +143,18 @@ int main(int argc, char *argv[])
 
     GDALAllRegister();
    
+    char *MapESRIProjStrings[] =
+    {
+        "",
+        "PROJCS[\"Albers\",GEOGCS[\"GCS_North_American_1983\",DATUM[\"D_North_American_1983\",SPHEROID[\"GRS_1980\",6378137,298.257222101]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Albers\"],PARAMETER[\"standard_parallel_1\",29.5],PARAMETER[\"standard_parallel_2\",45.5],PARAMETER[\"latitude_of_origin\",23],PARAMETER[\"central_meridian\",-96],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"METERS\",1]]",
+        "PROJCS[\"WGS 84 / Pseudo - Mercator\",GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137,298.257223563]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Mercator\"],PARAMETER[\"central_meridian\",0],PARAMETER[\"scale_factor\",1],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"Meter\",1]]"
+    };
+
+    CPLStringList papszPrj5070;
+    papszPrj5070.AddString(MapESRIProjStrings[1]);
+
     WfipsData wfipsData;
+    rc = wfipsData.spatialReference.importFromESRI(papszPrj5070);
     rc = FillWfipsData(wfipsData, dataPath);
     if (rc != 0)
     {
@@ -150,6 +166,7 @@ int main(int argc, char *argv[])
     MultiPolygonData multiPolygonData;
     FireshedData fireshedData;
    
+    rc = multiPolygonData.spatialReference.importFromESRI(papszPrj5070);
     multiPolygonData.boundingBoxes.resize(num_shape_files);
     multiPolygonData.polygons.resize(num_shape_files);
 
@@ -168,11 +185,10 @@ int main(int argc, char *argv[])
     }
 
     // Parallel
-#pragma omp parallel for
+//#pragma omp parallel for
     for (int shapeFileIndex = 0; shapeFileIndex < num_shape_files; shapeFileIndex++)
     {
-        ReadFromShapeFileToMemory(shapeFileIndex, shapeFilePathList[shapeFileIndex], fireshedData, wfipsData, multiPolygonData);
-        //printf("polygon and multiPolygon vectors populated for file\n    %s\n", shapeFilePathList[shapeFileIndex].c_str());
+        ReadFromShapeFileToMemory(shapeFileIndex, dataPath, shapeFilePathList[shapeFileIndex], fireshedData, wfipsData, multiPolygonData);
         FillFireOriginData(shapeFileIndex, shapeFilePathList[shapeFileIndex], fireshedData, wfipsData, multiPolygonData);
     }
     // End Parallel
@@ -185,13 +201,11 @@ int main(int argc, char *argv[])
 /***************************************************************************
 // Shapefile Reading Function
 ***************************************************************************/
-
-void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shapeFilePath, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData)
+void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shapeFilePath, const std::string shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData, MultiPolygonData& multiPolygonData)
 {
     OGRErr error;
-    OGRDataSource *poDataSource;
-
-    GDALDataset *poDS = static_cast<GDALDataset*>(GDALOpenEx(shapeFilePath.c_str(), GDAL_OF_VECTOR, NULL, NULL, NULL));
+    
+    GDALDataset *poDS = static_cast<GDALDataset*>(GDALOpenEx(shapeFileName.c_str(), GDAL_OF_UPDATE, NULL, NULL, NULL));
 
 
     OGRLayer  *poLayer = poDS->GetLayer(0);
@@ -200,17 +214,6 @@ void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shape
     OGRwkbGeometryType LayerGeometryType = poLayer->GetGeomType();
     int NumberOfFeatures = poLayer->GetFeatureCount(true);
     poLayer->ResetReading();
-
-    //char *MapESRIProjStrings[] =
-    //{
-    //    "",
-    //    "PROJCS[\"Albers\",GEOGCS[\"GCS_North_American_1983\",DATUM[\"D_North_American_1983\",SPHEROID[\"GRS_1980\",6378137,298.257222101]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Albers\"],PARAMETER[\"standard_parallel_1\",29.5],PARAMETER[\"standard_parallel_2\",45.5],PARAMETER[\"latitude_of_origin\",23],PARAMETER[\"central_meridian\",-96],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"METERS\",1]]",
-    //    "PROJCS[\"WGS 84 / Pseudo - Mercator\",GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137,298.257223563]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Mercator\"],PARAMETER[\"central_meridian\",0],PARAMETER[\"scale_factor\",1],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"Meter\",1]]"
-    //};
-    //CPLStringList papszPrj5070 = NULL;
-    //OGRSpatialReference spatialReference;
-    //papszPrj5070.AddString(MapESRIProjStrings[1]);
-    //error = spatialReference.importFromESRI(papszPrj5070);
 
     int sizeInAcres = 0;
     int fireNumber;
@@ -227,14 +230,15 @@ void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shape
 
     if (wkbFlatten(LayerGeometryType) == wkbPolygon)
     {
-        OGRFeature *poFeature;
+        OGRFeature *poInputFeature;
+        
         for (int polygonIndex = 0; polygonIndex < NumberOfFeatures; polygonIndex++)
         {
-            poFeature = poLayer->GetNextFeature();
+            poInputFeature = poLayer->GetNextFeature();
             OGRGeometry *poGeometry;
 
-            poGeometry = poFeature->GetGeometryRef();
-
+            poGeometry = poInputFeature->GetGeometryRef();
+            poGeometry->assignSpatialReference(&(multiPolygonData.spatialReference));
             double x = 0.0;
             double y = 0.0;
 
@@ -244,19 +248,19 @@ void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shape
 
                 if (iField == fire_number)
                 {
-                    fireNumber = poFeature->GetFieldAsInteger(iField);
+                    fireNumber = poInputFeature->GetFieldAsInteger(iField);
                 }
                 if (iField == acres)
                 {
-                    sizeInAcres = poFeature->GetFieldAsInteger(iField);
+                    sizeInAcres = poInputFeature->GetFieldAsInteger(iField);
                 }
                 else if (iField == x_val)
                 {
-                    x = poFeature->GetFieldAsDouble(iField);
+                    x = poInputFeature->GetFieldAsDouble(iField);
                 }
                 else if (iField == y_val)
                 {
-                    y = poFeature->GetFieldAsDouble(iField);
+                    y = poInputFeature->GetFieldAsDouble(iField);
                 }
             }
 
@@ -266,7 +270,7 @@ void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shape
                 originCell = (wfipsData.gridData.WG_GetCellIndex(x, y));
                 fireshedData.fireOriginCells[shapeFileIndex].push_back(originCell);
                 fireshedData.wfipscellsToFireOriginsForSingleFile[shapeFileIndex].insert(std::make_pair(originCell, originCell));
-                //multiPolygonData.fireNumbers.push_back(fireNumber);
+                //fireshedData.fireNumbers.push_back(fireNumber);
 
                 if (poGeometry != NULL && (wkbFlatten(poGeometry->getGeometryType()) == wkbMultiPolygon))
                 {         
@@ -282,15 +286,17 @@ void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shape
                     multiPolygonData.polygons[shapeFileIndex].push_back(*((OGRMultiPolygon*)poPolygon));
                 }
 
+             
+
                 OGREnvelope Envelope;
                 poGeometry->getEnvelope(&Envelope);
-                sBoundingBox.MaxX = Envelope.MaxX;
-                sBoundingBox.MaxY = Envelope.MaxY;
-                sBoundingBox.MinX = Envelope.MinX;
-                sBoundingBox.MinY = Envelope.MinY;
+                sBoundingBox.maxX = Envelope.MaxX;
+                sBoundingBox.maxY = Envelope.MaxY;
+                sBoundingBox.minX = Envelope.MinX;
+                sBoundingBox.minY = Envelope.MinY;
                 multiPolygonData.boundingBoxes[shapeFileIndex].push_back(sBoundingBox);
             }
-            OGRFeature::DestroyFeature(poFeature);
+            OGRFeature::DestroyFeature(poInputFeature);
         }
     }
 
@@ -299,7 +305,7 @@ void ReadFromShapeFileToMemory(const int shapeFileIndex, const std::string shape
 
 bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBoundingBox)
 {
-    return ((innerBoundingBox.MinX >= outerBoundingBox.MinX) && (innerBoundingBox.MaxX <= outerBoundingBox.MaxX) && (innerBoundingBox.MinY >= outerBoundingBox.MinY) && (innerBoundingBox.MaxY <= outerBoundingBox.MaxY));
+    return ((innerBoundingBox.minX >= outerBoundingBox.minX) && (innerBoundingBox.maxX <= outerBoundingBox.maxX) && (innerBoundingBox.minY >= outerBoundingBox.minY) && (innerBoundingBox.maxY <= outerBoundingBox.maxY));
 }
 
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath)
@@ -321,23 +327,27 @@ int FillWfipsData(WfipsData& wfipsData, std::string dataPath)
     wfipsData.numRows = wfipsData.gridData.GetNumY();
     wfipsData.numCols = wfipsData.gridData.GetNumX();
 
+    SBoundingBox currentCellBoundingBox;
     int cellIndex = 0;
+
+    wfipsData.gridData.GetWfipsGridGeotransform(wfipsData.GeoTransform);
+
     for (int row = 0; row < wfipsData.numRows; row++)
     {
-        SBoundingBox currentCellBoundingBox;
+      
         for (int col = 0; col < wfipsData.numCols; col++)
         {
             cellIndex = wfipsData.gridData.GetWfipsCellIndex(row, col);
             wfipsData.gridData.WG_GetCellCoords(cellIndex,
-                &currentCellBoundingBox.MinX,
-                &currentCellBoundingBox.MinY,
-                &currentCellBoundingBox.MaxX,
-                &currentCellBoundingBox.MaxY);
+                &currentCellBoundingBox.minX,
+                &currentCellBoundingBox.minY,
+                &currentCellBoundingBox.maxX,
+                &currentCellBoundingBox.maxY);
             wfipsData.cellBoundingBoxes.push_back(currentCellBoundingBox);
             OGRPoint cellCenteroid;
             //cellCenteroid.assignSpatialReference(&spatialReference);
-            cellCenteroid.setX(currentCellBoundingBox.MinX + cellHalfWidth);
-            cellCenteroid.setY(currentCellBoundingBox.MinY + cellHalfWidth);
+            cellCenteroid.setX(currentCellBoundingBox.minX + cellHalfWidth);
+            cellCenteroid.setY(currentCellBoundingBox.minY + cellHalfWidth);
             wfipsData.cellCentroids.push_back(cellCenteroid);
         }
     }
@@ -348,18 +358,22 @@ void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, Fireshe
 {
     int lastError = 0;
     bool isInBoundingBox = false;
-    OGRBoolean isIntersecting = false;
 
     int cellIndex = 0;
     const int num_polygons = multiPolygonData.polygons[shapeFileIndex].size();
 
+    //vector<vector<int>> wfipscellsForEachPolygon;
+    //wfipscellsForEachPolygon.resize(num_polygons);
+
+    OGRBoolean intersects = false;
+
     double currentProgress = 0;
     for (int multipolygonIndex = 0; multipolygonIndex < num_polygons; multipolygonIndex++)
     {
-        double minX = multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex].MinX;
-        double maxX = multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex].MaxX;
-        double minY = multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex].MinY;
-        double maxY = multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex].MaxY;
+        double minX = multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex].minX;
+        double maxX = multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex].maxX;
+        double minY = multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex].minY;
+        double maxY = multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex].maxY;
 
         int upperLeftCell = wfipsData.gridData.WG_GetCellIndex(minX, maxY);
         int lowerRightCell = wfipsData.gridData.WG_GetCellIndex(maxX, minY);
@@ -397,19 +411,30 @@ void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, Fireshe
             for (int col = minCol; col < maxCol; col++)
             {
                 cellIndex = wfipsData.gridData.GetWfipsCellIndex(row, col);
-
-                if (!(cellIndex == fireshedData.fireOriginCells[shapeFileIndex][multipolygonIndex]))
+                origin = fireshedData.fireOriginCells[shapeFileIndex][multipolygonIndex];
+                if (!(cellIndex == origin))
                 {
                     isInBoundingBox = BoundingBoxCheck(wfipsData.cellBoundingBoxes[cellIndex], multiPolygonData.boundingBoxes[shapeFileIndex][multipolygonIndex]);
                     if (isInBoundingBox)
                     {
-                        isIntersecting = wfipsData.cellCentroids[cellIndex].Intersects(&multiPolygonData.polygons[shapeFileIndex][multipolygonIndex]);
+                        SBoundingBox cellBoundingBox = wfipsData.cellBoundingBoxes[cellIndex];
+                        OGRLinearRing ring;
+                        ring.addPoint(cellBoundingBox.minX, cellBoundingBox.maxY);
+                        ring.addPoint(cellBoundingBox.minX, cellBoundingBox.minY);
+                        ring.addPoint(cellBoundingBox.maxX, cellBoundingBox.minY);
+                        ring.addPoint(cellBoundingBox.maxX, cellBoundingBox.maxY);
+                        ring.addPoint(cellBoundingBox.minX, cellBoundingBox.maxY);
+                        OGRPolygon cellPoly;
+                        cellPoly.addRing(&ring);
+
+                        intersects = cellPoly.Intersects(&multiPolygonData.polygons[shapeFileIndex][multipolygonIndex]);
                         lastError = (int)CPLGetLastErrorNo();
 
-                        if (isIntersecting)
+                        if (intersects)
                         {
-                            //printf("Intersection found\n");
+                            //printf("cell in poly intersection\n");
                             fireshedData.wfipscellsToFireOriginsForSingleFile[shapeFileIndex].insert(std::make_pair(cellIndex, origin));
+                            //wfipscellsForEachPolygon[multipolygonIndex].push_back(cellIndex);
                         }
                     }
                 }
@@ -419,7 +444,7 @@ void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, Fireshe
         if ((multipolygonIndex > 0) && (multipolygonIndex % 10000 == 0))
         {
             currentProgress = (multipolygonIndex / (num_polygons * 1.0)) * 100.00;
-            printf("file %s\n    is %4.2f percent complete\n", shapeFileName.c_str());
+            printf("file\n    %s\n    is %4.2f percent complete\n", shapeFileName.c_str(), currentProgress);
         }
     }
 
@@ -429,16 +454,12 @@ void FillFireOriginData(const int shapeFileIndex, string& shapeFileName, Fireshe
     multiPolygonData.boundingBoxes[shapeFileIndex].clear();
     multiPolygonData.polygons[shapeFileIndex].clear();
 
-    printf("file %s\n    is 100 percent complete\n", shapeFileName.c_str(), currentProgress);
+    printf("file\n    %s\n   is 100 percent complete\n", shapeFileName.c_str());
 }
 
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
 {
     multiset<pair<int, int>> totalWfipscellsToFireOrigins;
-
-    vector<vector<int>> originCellsForWfipscellRowIndex;
-    unordered_map<int, int> rowIndexToWfipsCell;
-    vector<vector<int>> frequenciesForWfipscellRowIndex;
 
     int wfipscell = -1;
     int origin = -1;
@@ -471,11 +492,11 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
             wfipscellPrevious = wfipscell;
             wfipsCellIndex++;
             // Add current wfipscell index to map so it can be retrieved by row index later
-            rowIndexToWfipsCell.insert(std::make_pair(wfipsCellIndex, wfipscell));
+            fireshedData.vectorRowIndexToWfipsCell.insert(std::make_pair(wfipsCellIndex, wfipscell));
             vector<int> originVectorRow;
-            originCellsForWfipscellRowIndex.push_back(originVectorRow);
+            fireshedData.originCellsForWfipscellVectorRowIndex.push_back(originVectorRow);
             vector<int> frequencyVectorRow;
-            frequenciesForWfipscellRowIndex.push_back(frequencyVectorRow);
+            fireshedData.frequenciesForWfipscellVectorRowIndex.push_back(frequencyVectorRow);
         }
         if (originPrevious != origin) // Origin changed
         {
@@ -486,13 +507,13 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
         if (originChanged || wfipsCellChanged) // Add element to current vector row
         {
             frequency = 1;
-            originCellsForWfipscellRowIndex[wfipsCellIndex].push_back(origin);
-            frequenciesForWfipscellRowIndex[wfipsCellIndex].push_back(frequency);
+            fireshedData.originCellsForWfipscellVectorRowIndex[wfipsCellIndex].push_back(origin);
+            fireshedData.frequenciesForWfipscellVectorRowIndex[wfipsCellIndex].push_back(frequency);
         }
         else // Increment frequency and overwrite element containing frequency count for current wfipscell
         {
             frequency++;
-            frequenciesForWfipscellRowIndex[wfipsCellIndex].back() = frequency;
+            fireshedData.frequenciesForWfipscellVectorRowIndex[wfipsCellIndex].back() = frequency;
         }
     }
 
@@ -502,11 +523,56 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
 
 void CreateFireShedDB(FireshedData& fireshedData, WfipsData& wfipsData)
 {
-    //for (int wfipsCellIndex = 0; wfipsCellIndex < readOriginCells.size(); wfipsCellIndex++)
+    int rc = 0;
+    sqlite3 *db;
+    sqlite3_stmt *stmt;
+
+    char *sqlErrMsg = 0;
+
+    string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
+        "wfipscell INTEGER," \
+        "origin INTEGER,"
+        "frequency INTEGER, " \
+        "x REAL," \
+        "y REAL)";
+
+    string insertTestSQLString = "INSERT INTO firesheds(" \
+        "wfipscell, " \
+        "origin, " \
+        "frequency, " \
+        "x, " \
+        "y) " \
+        "VALUES(" \
+        ":wfipscell, " \
+        ":origin, " \
+        ":frequency, " \
+        ":x, " \
+        ":y)";
+
+    struct ColumnIndex
+    {
+        enum ColumnIndexEnum
+        {
+            wfipscell = 1,
+            origin = 2,
+            frequency = 3,
+            x = 4,
+            y = 5
+        };
+    };
+
+    int wfipscell = -1;
+    int bindColumnIndex = -1;
+    int origin = -1;
+    int err = -1;
+    double cellCenterX = -1;
+    double cellCenterY = -1;
+   
+    //for (int wfipsCellIndex = 0; wfipsCellIndex < fireshedData.originCellsForWfipscellVectorRowIndex.size(); wfipsCellIndex++)
     //{
-    //    for (int originCellIndex = 0; originCellIndex < readOriginCells[wfipsCellIndex].size(); originCellIndex++)
+    //    for (int originCellIndex = 0; originCellIndex < fireshedData.originCellsForWfipscellVectorRowIndex[wfipsCellIndex].size(); originCellIndex++)
     //    {
-    //        wfipscell = rowIndexToWfipsCell.at(wfipsCellIndex);
+    //        wfipscell = fireshedData.vectorRowIndexToWfipsCell.at(wfipsCellIndex);
     //        bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":wfipscell");
     //        rc = sqlite3_bind_int(stmt, bindColumnIndex, wfipscell);
 
@@ -519,6 +585,9 @@ void CreateFireShedDB(FireshedData& fireshedData, WfipsData& wfipsData)
     //        rc = sqlite3_bind_int(stmt, bindColumnIndex, frequency);
 
     //        wfipsData.gridData.WG_GetCellCoords(origin, &cellMinX, &cellMinY, &cellMaxX, &cellMaxY);
+
+    //        double cellCenterX = wfipsData.cellCentroids[wfipsCellIndex].getX();
+    //        double cellCenterY = wfipsData.cellCentroids[wfipsCellIndex].getY();
 
     //        cellCenterX = cellMinX + cellHalfWidth;
     //        cellCenterY = cellMinY + cellHalfWidth;
