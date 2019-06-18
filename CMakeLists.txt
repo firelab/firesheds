@@ -64,9 +64,10 @@ MESSAGE( STATUS "Optional package Sqlite3 was not found" )
 ENDIF( SQLITE3_FIND_REQUIRED)
 ENDIF(SQLITE3_FOUND)
 
-ADD_EXECUTABLE(${PROJECT_NAME} "src/main.cpp"
-				#"src/sqlite3.c"
+ADD_EXECUTABLE(${PROJECT_NAME} 
+				"src/main.cpp"
 				"src/WfipsGrid.cpp"
 				"src/WfipsGridData.cpp")
 
 TARGET_LINK_LIBRARIES(${PROJECT_NAME} ${GDAL_LIBRARY})
+TARGET_LINK_LIBRARIES (${PROJECT_NAME} ${SQLITE3_LIBRARIES})

@@ -30,6 +30,7 @@ class CWfipsGridData
 public:
 	CWfipsGridData();
 	~CWfipsGridData();
+
 	bool WG_GetCellCoords(int cell, double *minX, double *minY, double *maxX, double *maxY);
 	const int WG_GetCellIndex(double x, double y);
 	int GetWfipsCell(double lat, double lon, int WfipsSRS = 0);

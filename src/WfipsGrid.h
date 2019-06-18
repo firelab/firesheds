@@ -23,6 +23,8 @@ public:
 	float CellValueFloat(int row, int col);
 	int CellValueInt(int row, int col);
 
+    int WG_GetCellIndex(double x, double y);
+
 	int CellValueDirectInt(double lat, double lon);
 	int CellValueDirectBool(double lat, double lon);
 	int CellValueDirectFloat(double lat, double lon);
@@ -45,6 +47,7 @@ public:
 	bool GetGeoTransform(double *pTargetTransform);
 	bool SaveAs(string outfileName);
 	OGRCoordinateTransformation *GetCoordinateTransformation(int SRS);
+    OGRSpatialReference *GetConusAlbersSRS();
 private:
 	long long int CellIndex(int WfipsSRS, double lat, double lon);
 	//int GetWfipsGeotransform(double *pAdfGeoTransform);
@@ -54,6 +57,7 @@ private:
 	bool *m_bVals;
 	float *m_fVals;
 	int *m_iVals;
+    int *m_iMemVals;
 	int m_nRows;
     int m_nCols;
 	double m_minX;

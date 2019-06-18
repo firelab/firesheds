@@ -213,7 +213,6 @@ int CWfipsGridData::GetRowColFromWfipsCell(int cell, int *row, int *col)
 	return 0;
 }
 
-
 int CWfipsGridData::LoadData(const char* dataPath)
 {
 	m_strDataPath = dataPath;
@@ -685,10 +684,6 @@ int CWfipsGridData::GetWUIClass(int row, int col)
 	}
 	return -9999;
 }
-
-
-
-
 
 int CWfipsGridData::GetGridValueAsInt(WG_LAYER layer, int WfipsSRS, double lat, double lon)
 {
