@@ -218,7 +218,11 @@ int CWfipsGridData::LoadData(const char* dataPath)
 	m_strDataPath = dataPath;
 	string gridFileName;
 	gridFileName = m_strDataPath + "WFIPSgrid.tif";
-	m_wgWfipscells.LoadData(gridFileName, WGT_INT);
+	int rc = m_wgWfipscells.LoadData(gridFileName, WGT_INT);
+    if (rc != 0)
+    {
+        return rc;
+    }
 	m_wgWfipscells.GetGeoTransform(m_WGadfGeoTransform);
 	//gridFileName = m_strDataPath + "\\fwa.tif";
 	//m_wgFwaGrid.LoadData(gridFileName, WGT_INT);

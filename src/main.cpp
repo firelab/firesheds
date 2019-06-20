@@ -11,11 +11,13 @@
 #include "ogrsf_frmts.h"
 #include "gdal_alg.h"
 
+#include <algorithm>
 #include <omp.h>
 #include <set>
 #include <vector>
 #include <unordered_map>
 #include <cstdio>
+#include <ctime>
 #include <gdal_utils.h>
 
 #include "sqlite3.h"
@@ -55,22 +57,20 @@ struct WfipsData
 
 struct FireshedData
 {
-    //vector<int> fireNumbers;
-    vector<vector<int>> fireOriginCells;
-    vector<SBoundingBox> cellBoundingBoxes;
+    vector<int> fireNumbers;
     vector<vector<unordered_map<int, int>>> wfipscellsToFireOriginsForSingleFile;
     vector<vector<int>> originCellsForWfipscell;
-    unordered_map<int, int> finalIndexToWfipsCell;
+    unordered_map<int, int> finalIndexToWfipsCellMap;
     vector<vector<int>> frequenciesForWfipscell;
 };
 
 bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBoundingBox);
 
-void ReadFromShapeFileToMemory(bool verbose, const int shapeFileListSize, const int shapeFileIndex, const std::string shapeFilePath, const std::string shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData);
-void FillOriginDataForSingleFire(vector<int>& rasterBuffer, const int shapeFileIndex, const int fireIndex, const OGREnvelope fireBoundingBox, FireshedData& fireshedData, WfipsData& wfipsData);
+void ReadFromShapeFileToMemory(const bool verbose, const int shapeFileListSize, const int shapeFileIndex, const std::string shapeFilePath, const std::string shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData);
+void FillOriginDataForSingleFire(int originCell, vector<int>& rasterBuffer, const int shapeFileIndex, const int fireIndex, const OGREnvelope fireBoundingBox, FireshedData& fireshedData, WfipsData& wfipsData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
-void CreateFireShedDB(string outPath, FireshedData& fireshedData, WfipsData& wfipsData);
+int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& fireshedData, WfipsData& wfipsData);
 
 static const double cellHalfWidth = 1000; // 1 km
 
@@ -86,35 +86,69 @@ int main(int argc, char *argv[])
     string dataPath = "";
     string outPath = "";
     int rc = 0;
-    bool verbose = false;
+    bool verboseParameter = false;
 
-    if (argc == 3)
+    const int SUCCESS = 0;
+
+    if (argc == 2)
+    {
+        string verboseTest = argv[1];
+        std::transform(verboseTest.begin(), verboseTest.end(), verboseTest.begin(), ::tolower);
+        if (verboseTest == "verbose")
+        {
+            printf("Error: need path to shapefiles as first argument");
+            printf("\n    optional second argument specifies output path");
+            printf("\n    if only the input path is provided, output path will be the same");
+            printf("\n    for progress info on console, enter \"verbose\" as last argument");
+            return EXIT_FAILURE;
+        }
+        dataPath = argv[1];
+        outPath = argv[1];
+    }
+    else if (argc == 3)
     {
         dataPath = argv[1];
-        outPath = argv[2];
+        string verboseTest = argv[2];
+        std::transform(verboseTest.begin(), verboseTest.end(), verboseTest.begin(), ::tolower);
+        if (verboseTest == "verbose")
+        {
+            verboseParameter = true;
+            outPath = argv[1];
+        }
+        else
+        {
+            outPath = argv[2];
+        }
     }
     else if (argc == 4)
     {
         dataPath = argv[1];
         outPath = argv[2];
         string verboseTest = argv[3];
+        std::transform(verboseTest.begin(), verboseTest.end(), verboseTest.begin(), ::tolower);
         if (verboseTest == "verbose")
         {
-            verbose = true;
+            verboseParameter = true;
         }
         else
         {
-            printf("Error: need path to shapefiles and db output directory as arguments");
-            printf("\n    for progress info on console, enter \"verbose\" as third argument");
+            printf("Error: need path to shapefiles as first argument");
+            printf("\n    optional second argument specifies output path");
+            printf("\n    if only the input path is provided, output path will be the same");
+            printf("\n    for progress info on console, enter \"verbose\" as last argument");
             return EXIT_FAILURE;
         }
     }
     else
     {
-        printf("Error: need path to shapefiles and db output directory as arguments");
-        printf("\nfor progress info on console, enter \"verbose\" as third argument");
+        printf("Error: need path to shapefiles as first argument");
+        printf("\n    optional second argument specifies output path");
+        printf("\n    if only the input path is provided, output path will be the same");
+        printf("\n    for progress info on console, enter \"verbose\" as last argument");
         return EXIT_FAILURE;
     }
+
+    const bool verbose = verboseParameter;
 
     if ((dataPath.back() != '/') && (dataPath.back() != '\\'))
     {
@@ -141,7 +175,8 @@ int main(int argc, char *argv[])
             if (pos != string::npos)
             {
                 extension = fileName.substr(pos, fileName.size());
-                if (extension == ".SHP" || extension == ".shp")
+                std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+                if (extension == ".shp")
                 {
                     //printf("%s\n", temp.c_str());
                     shapefileNameList.push_back(fileName);
@@ -166,6 +201,19 @@ int main(int argc, char *argv[])
 
     const int shapefileListSize = shapefilePathList.size();
 
+    sqlite3 *db = nullptr;
+
+    string outPutDbFullPath = outPath + "firesheds.db";
+    rc = sqlite3_open_v2(outPutDbFullPath.c_str(), &db,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+        NULL);
+
+    if (rc != SQLITE_OK || db == nullptr)
+    {
+        printf("Error: Could not create firesheds.db (is output path valid?)\nexiting program\n");
+        return EXIT_FAILURE;
+    }
+
     GDALAllRegister();
 
     char *MapESRIProjStrings[] =
@@ -180,45 +228,64 @@ int main(int argc, char *argv[])
 
     WfipsData wfipsData;
     rc = wfipsData.spatialReference.importFromESRI(papszPrj5070);
-    rc = FillWfipsData(wfipsData, dataPath);
-    if (rc != 0)
+
+    if (verbose)
     {
-        printf("Error: WFIPS data loading failed, exiting program\n");
+        printf("Loading WFIPS data\n");
+    }
+
+    rc = FillWfipsData(wfipsData, dataPath);
+    if (rc != SUCCESS)
+    {
+        printf("Error: WFIPS data loading failed\n");
+        printf("    Make sure the file \"WFIPSGrid.tif\" exists in\n    %s\n\n", dataPath.c_str());
         return EXIT_FAILURE;
     }
-    printf("WFIPS data populated\n");
+    else if (verbose)
+    {
+        printf("WFIPS data populated\n\n");
+    }
 
+    printf("Processing all shapefiles in\n    %s\n\nPlease wait...\n\n", dataPath.c_str());
     FireshedData fireshedData;
 
     fireshedData.wfipscellsToFireOriginsForSingleFile.resize(shapefileListSize);
-    fireshedData.fireOriginCells.resize(shapefileListSize);
-    fireshedData.wfipscellsToFireOriginsForSingleFile.resize(shapefileListSize);
 
     double currentProgress = 0;
+    clock_t cStartClock = clock();
+
     for (int shapefileIndex = 0; shapefileIndex < shapefileListSize; shapefileIndex++)
     {
+        if ((shapefileIndex > 0) && verbose)
+        {
+            printf("Processed %d files out of %d in\n", shapefileIndex, shapefileListSize);
+            printf("    %s\n    %4.2f percent of all files to be processed are complete\n", dataPath.c_str(), currentProgress);
+            printf("    total time elapsed is %4.2f seconds\n\n", (clock() - cStartClock) / (double)CLOCKS_PER_SEC);
+        }
         ReadFromShapeFileToMemory(verbose, shapefileListSize, shapefileIndex, dataPath, shapefileNameList[shapefileIndex], fireshedData, wfipsData);
         currentProgress = (shapefileIndex / (shapefileListSize * 1.0)) * 100.00;
-        if (verbose)
-        {
-            printf("processed %d files out of %d in\n", shapefileIndex, shapefileListSize);
-            printf("    %s\n    %4.2f percent of all files to be processed are complete\n\n", dataPath.c_str(), currentProgress);
-        }
     }
 
-    printf("processed %d files out of %d in\n", shapefileListSize, shapefileListSize);
-    printf("    %s\n    100 percent of all files to be processed are complete\n\n", dataPath.c_str());
+    if (verbose)
+    {
+        printf("Processed %d files out of %d in\n", shapefileListSize, shapefileListSize);
+        printf("    %s\n    100 percent of all files to be processed are complete\n\n", dataPath.c_str());
+        printf("    total time elapsed is %4.2f seconds\n\n", (clock() - cStartClock) / (double)CLOCKS_PER_SEC);
+    }
 
     ConsolidateFinalData(shapefileListSize, fireshedData);
-    CreateFireShedDB(outPath, fireshedData, wfipsData);
+    CreateFireShedDB(verbose, db, fireshedData, wfipsData);
 
-    return 0;
+    printf("Successfully processed all shapefiles in\n    %s\n", dataPath.c_str());
+    printf("    and created \"firesheds.db\" in\n    %s\n\n", outPath.c_str());
+    printf("Total time elapsed is %4.2f seconds\n\n", (clock() - cStartClock) / (double)CLOCKS_PER_SEC);
+    return SUCCESS;
 }
 
 /***************************************************************************
 // Shapefile Reading Function
 ***************************************************************************/
-void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const int shapefileIndex, const std::string shapefilePath, const std::string shapefileName, FireshedData& fireshedData, WfipsData& wfipsData)
+void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, const int shapefileIndex, const std::string shapefilePath, const std::string shapefileName, FireshedData& fireshedData, WfipsData& wfipsData)
 {
     OGRErr error;
     string shapefileFullPath = shapefilePath + shapefileName;
@@ -260,6 +327,10 @@ void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const 
     int bandList[1] = { 1 };
     std::vector<double> geomBurnValue(nBandCount, 1.0);
     std::vector<OGRGeometryH> ogrBurnGeometries;
+    std::vector<int> originCells;
+
+    ogrBurnGeometries.reserve(NumberOfFeatures);
+    originCells.reserve(NumberOfFeatures);
 
     if (wkbFlatten(LayerGeometryType) == wkbPolygon)
     {
@@ -300,22 +371,27 @@ void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const 
             if (sizeInAcres >= 150)
             {
                 int originCell = (wfipsData.gridData.WG_GetCellIndex(x, y));
-                fireshedData.fireOriginCells[shapefileIndex].push_back(originCell);
+                originCells.push_back(originCell);
                 poGeometry->closeRings();
                 ogrBurnGeometries.push_back((OGRGeometryH)poGeometry->clone());
             }
             OGRFeature::DestroyFeature(poInputFeature);
         }
     }
+
     GDALClose(poShapefileDS);
 
     int firesProcessed = 0;
     const int totalFires = ogrBurnGeometries.size();
 
     fireshedData.wfipscellsToFireOriginsForSingleFile[shapefileIndex].resize(totalFires);
-    fireshedData.fireOriginCells[shapefileIndex].resize(totalFires);
 
-    int numCores = omp_get_num_procs();
+    int numCores = omp_get_num_procs() - 1;
+    if (numCores < 1)
+    {
+        numCores = 1;
+    }
+
     omp_set_num_threads(numCores);
 
     vector<vector<int>> buffer;
@@ -324,6 +400,9 @@ void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const 
 
     buffer.resize(numCores);
     inMemoryRaster.resize(numCores);
+
+    char** options = nullptr;
+    options = CSLSetNameValue(options, "ALL_TOUCHED", "TRUE");
 
     // Parallel
 #pragma omp parallel for shared(inMemoryRaster)
@@ -336,6 +415,7 @@ void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const 
     }
 
 #pragma omp parallel for shared(firesProcessed, currentProgress)
+  
     for (int fireIndex = 0; fireIndex < totalFires; fireIndex++)
     {
         int threadID = omp_get_thread_num();
@@ -349,9 +429,6 @@ void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const 
 
         OGREnvelope envelope;
         poGeometry->getEnvelope(&envelope);
-
-        char** options = nullptr;
-        options = CSLSetNameValue(options, "ALL_TOUCHED", "TRUE");
 
         CPLErr err = CE_None;
 
@@ -372,8 +449,8 @@ void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const 
         //        printf("%s driver not available.\n", geoTiffDriverName.c_str());
         //        exit(1);
         //    }
-        //    string destination = shapeFilePath + "\\test\\test.tif";
-        //    hDstDS = GDALCreateCopy(hGeoTiffDriver, destination.c_str(), hMemDset, FALSE,
+        //    string destination = shapefilePath + "test.tif";
+        //    hDstDS = GDALCreateCopy(hGeoTiffDriver, destination.c_str(), hRasterDS, FALSE,
         //        NULL, NULL, NULL);
         //    /* Once we're done, close properly the dataset */
         //    if (hDstDS != NULL)
@@ -381,10 +458,11 @@ void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const 
         //        GDALClose(hDstDS);
         //    }
         //}
+
         GDALDataset* rasterDS = inMemoryRaster[threadID];
 
         rasterDS->RasterIO(GF_Read, 0, 0, nBufXSize, nBufYSize, buffer[threadID].data(), nBufXSize, nBufYSize, GDT_Int32, 1, NULL, 0, 0, NULL);
-        FillOriginDataForSingleFire(buffer[threadID], shapefileIndex, fireIndex, envelope, fireshedData, wfipsData);
+        FillOriginDataForSingleFire(originCells[fireIndex], buffer[threadID], shapefileIndex, fireIndex, envelope, fireshedData, wfipsData);
 
         std::fill(buffer[threadID].data(), buffer[threadID].data(), 0);
 
@@ -393,34 +471,50 @@ void ReadFromShapeFileToMemory(bool verbose, const int shapefileListSize, const 
 #pragma omp atomic
         firesProcessed++;
 
-        if (verbose && (firesProcessed % 1000) == 0)
+        if (verbose && (firesProcessed % 10000) == 0)
         {
-            //Critical Section
+        //Critical Section
 #pragma omp critical
             {
                 currentProgress = (firesProcessed / (totalFires * 1.0)) * 100.00;
-                printf("processed %d fires out of %d in file\n", firesProcessed, totalFires);
+                printf("Processed %d fires out of %d in file\n", firesProcessed, totalFires);
                 printf("    %s\n    %4.2f percent of current file is complete\n\n", shapefileName.c_str(), currentProgress);
-                printf("processed %d files out of %d in\n", shapefileIndex, shapefileListSize);
+                printf("Processed %d files out of %d in\n", shapefileIndex, shapefileListSize);
                 currentProgress = (shapefileIndex / (shapefileListSize * 1.0)) * 100.00;
                 printf("    %s\n    %4.2f percent of all files to be processed are complete\n\n", shapefilePath.c_str(), currentProgress);
             }
-            //End Critical Section
+        //End Critical Section
         }
-    }
 
+    }
+    // End Parallel
+
+    // Parallel
 #pragma omp parallel for shared(inMemoryRaster)
     for (int threadIndex = 0; threadIndex < numCores; threadIndex++)
     {
         // Destroy in-memory rasters
         GDALClose(inMemoryRaster[threadIndex]);
-        inMemoryRaster[threadIndex] = NULL;
+        inMemoryRaster[threadIndex] = nullptr;
     }
     // End Parallel
 
-    inMemoryRaster.clear();
+    CSLDestroy(options);
 
-    printf("file\n    %s\n   is 100 percent complete\n", shapefileName.c_str());
+    for (int i = 0; i < ogrBurnGeometries.size(); i++)
+    {
+        OGRGeometryFactory::destroyGeometry((OGRGeometry*)ogrBurnGeometries[i]);
+    }
+
+    ogrBurnGeometries.clear();
+    inMemoryRaster.clear();
+    originCells.clear();
+
+    if (verbose)
+    {
+        printf("Processed %d fires out of %d in file\n", firesProcessed, totalFires);
+        printf("File\n    %s\n    is 100 percent complete\n\n", shapefileName.c_str());
+    }
 }
 
 bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBoundingBox)
@@ -431,7 +525,6 @@ bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBo
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath)
 {
     int rc = wfipsData.gridData.LoadData((const char*)dataPath.c_str());
-    std::printf("WFIPS grid data initialized\n");
 
     wfipsData.numRows = wfipsData.gridData.GetNumY();
     wfipsData.numCols = wfipsData.gridData.GetNumX();
@@ -441,10 +534,8 @@ int FillWfipsData(WfipsData& wfipsData, std::string dataPath)
     return rc;
 }
 
-void FillOriginDataForSingleFire(vector<int>& rasterBuffer, const int shapeFileIndex, const int geometryIndex, const OGREnvelope fireBoundingBox, FireshedData& fireshedData, WfipsData& wfipsData)
+void FillOriginDataForSingleFire(int origin, vector<int>& rasterBuffer, const int shapeFileIndex, const int geometryIndex, const OGREnvelope fireBoundingBox, FireshedData& fireshedData, WfipsData& wfipsData)
 {
-    int origin = fireshedData.fireOriginCells[shapeFileIndex][geometryIndex];
-
     double maxX = fireBoundingBox.MaxX;
     double maxY = fireBoundingBox.MaxY;
     double minX = fireBoundingBox.MinX;
@@ -538,7 +629,7 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
             wfipscellPrevious = wfipscell;
             wfipsCellIndex++;
             // Add current wfipscell index to map so it can be retrieved by row index later
-            fireshedData.finalIndexToWfipsCell.insert(std::make_pair(wfipsCellIndex, wfipscell));
+            fireshedData.finalIndexToWfipsCellMap.insert(std::make_pair(wfipsCellIndex, wfipscell));
             vector<int> originVectorRow;
             fireshedData.originCellsForWfipscell.push_back(originVectorRow);
             vector<int> frequencyVectorRow;
@@ -566,10 +657,9 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
     totalWfipscellsToFireOrigins.clear();
 }
 
-void CreateFireShedDB(string outPath, FireshedData& fireshedData, WfipsData& wfipsData)
+int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& fireshedData, WfipsData& wfipsData)
 {
     int rc = 0;
-    sqlite3 *db = NULL;
     sqlite3_stmt *stmt;
 
     char *sqlErrMsg = 0;
@@ -593,6 +683,20 @@ void CreateFireShedDB(string outPath, FireshedData& fireshedData, WfipsData& wfi
         ":frequency, " \
         ":x, " \
         ":y)";
+
+    //string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
+    //    "wfipscell INTEGER," \
+    //    "origin INTEGER,"
+    //    "frequency INTEGER)";
+
+    //string insertSQLString = "INSERT INTO firesheds(" \
+    //    "wfipscell, " \
+    //    "origin, " \
+    //    "frequency) " \
+    //    "VALUES(" \
+    //    ":wfipscell, " \
+    //    ":origin, " \
+    //    ":frequency)";
 
     struct ColumnIndex
     {
@@ -618,24 +722,35 @@ void CreateFireShedDB(string outPath, FireshedData& fireshedData, WfipsData& wfi
     double cellMaxX = -1;
     double cellMaxY = -1;
 
-    string outPutDbFullPath = outPath + "firesheds.db";
-    rc = sqlite3_open_v2(outPutDbFullPath.c_str(), &db,
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-        NULL);
-
     rc = sqlite3_exec(db, "DROP TABLE IF EXISTS 'firesheds'", NULL, NULL, &sqlErrMsg);
     rc = sqlite3_exec(db, createFireshedDBSQLString.c_str(), NULL, NULL, &sqlErrMsg);
 
+    if (rc != SQLITE_OK)
+    {
+        printf("Error: Could not create schema on firesheds.db\n");
+        return rc;
+    }
+
     rc = sqlite3_prepare_v2(db, insertSQLString.c_str(), -1, &stmt, NULL); // Prepare SQL statement
+    if (rc != SQLITE_OK)
+    {
+        printf("Error: Could not create prepared SQL statement\n");
+        return rc;
+    }
 
     rc = sqlite3_exec(db, "PRAGMA SYNCHRONOUS=OFF", NULL, NULL, NULL);
     rc = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, &sqlErrMsg);
+
+    if (verbose)
+    {
+        printf("Creating \"firesheds.db\", please wait...\n");
+    }
 
     for (int wfipsCellIndex = 0; wfipsCellIndex < fireshedData.originCellsForWfipscell.size(); wfipsCellIndex++)
     {
         for (int originCellIndex = 0; originCellIndex < fireshedData.originCellsForWfipscell[wfipsCellIndex].size(); originCellIndex++)
         {
-            wfipscell = fireshedData.finalIndexToWfipsCell.at(wfipsCellIndex);
+            wfipscell = fireshedData.finalIndexToWfipsCellMap.at(wfipsCellIndex);
             bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":wfipscell");
             rc = sqlite3_bind_int(stmt, bindColumnIndex, wfipscell);
 
@@ -667,8 +782,13 @@ void CreateFireShedDB(string outPath, FireshedData& fireshedData, WfipsData& wfi
     rc = sqlite3_exec(db, "PRAGMA SYNCHRONOUS=ON", NULL, NULL, NULL);
 
     // "Vacuum" the database to free unused memory
-    printf("Optimizing database file size, please wait...\n");
+    if (verbose)
+    {
+        printf("Optimizing database file size, please wait...\n");
+    }
     rc = sqlite3_exec(db, "VACUUM", NULL, NULL, NULL);
 
     rc = sqlite3_close(db);
+
+    return rc;
 }
