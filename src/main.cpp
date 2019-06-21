@@ -256,14 +256,16 @@ int main(int argc, char *argv[])
 
     for (int shapefileIndex = 0; shapefileIndex < shapefileListSize; shapefileIndex++)
     {
-        if ((shapefileIndex > 0) && verbose)
+        if (verbose && (shapefileIndex > 0))
         {
+            currentProgress = (shapefileIndex / (shapefileListSize * 1.0)) * 100.00;
+
             printf("Processed %d files out of %d in\n", shapefileIndex, shapefileListSize);
             printf("    %s\n    %4.2f percent of all files to be processed are complete\n", dataPath.c_str(), currentProgress);
             printf("    total time elapsed is %4.2f seconds\n\n", (clock() - cStartClock) / (double)CLOCKS_PER_SEC);
         }
         ReadFromShapeFileToMemory(verbose, shapefileListSize, shapefileIndex, dataPath, shapefileNameList[shapefileIndex], fireshedData, wfipsData);
-        currentProgress = (shapefileIndex / (shapefileListSize * 1.0)) * 100.00;
+        
     }
 
     if (verbose)
@@ -436,13 +438,12 @@ void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, 
             1, &(ogrBurnGeometries[fireIndex]), NULL, NULL,
             geomBurnValue.data(), options, NULL, NULL);
 
-        //// Test
+        //// Test in-memory raster contents
         //if (err == CE_None)
         //{
         //    //Create Tiff from in-memory raster
         //    GDALDatasetH hDstDS;
         //    string geoTiffDriverName = "GTiff";
-
         //    GDALDriverH hGeoTiffDriver = GDALGetDriverByName(geoTiffDriverName.c_str());
         //    if (hGeoTiffDriver == NULL)
         //    {
@@ -499,20 +500,22 @@ void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, 
     }
     // End Parallel
 
+    inMemoryRaster.clear();
+
     CSLDestroy(options);
+    originCells.clear();
 
     for (int i = 0; i < ogrBurnGeometries.size(); i++)
     {
+        // Destroy OGR Geometries
         OGRGeometryFactory::destroyGeometry((OGRGeometry*)ogrBurnGeometries[i]);
     }
 
     ogrBurnGeometries.clear();
-    inMemoryRaster.clear();
-    originCells.clear();
 
     if (verbose)
     {
-        printf("Processed %d fires out of %d in file\n", firesProcessed, totalFires);
+        printf("Processed %d fires out of %d\n", firesProcessed, totalFires);
         printf("File\n    %s\n    is 100 percent complete\n\n", shapefileName.c_str());
     }
 }
@@ -558,7 +561,7 @@ void FillOriginDataForSingleFire(int origin, vector<int>& rasterBuffer, const in
     wfipsData.gridData.GetRowColFromWfipsCell(upperLeft, &minRow, &minCol);
     wfipsData.gridData.GetRowColFromWfipsCell(lowerRight, &maxRow, &maxCol);
 
-    // Get window for reading raster buffer, add a 1 cell buffer around perimeter if possible
+    // Get window for reading raster buffer, add 1 cell padding around perimeter if possible
     if (maxRow < nBufXSize)
     {
         maxRow++;
@@ -664,39 +667,39 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
 
     char *sqlErrMsg = 0;
 
-    string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
-        "wfipscell INTEGER," \
-        "origin INTEGER,"
-        "frequency INTEGER, " \
-        "x REAL," \
-        "y REAL)";
-
-    string insertSQLString = "INSERT INTO firesheds(" \
-        "wfipscell, " \
-        "origin, " \
-        "frequency, " \
-        "x, " \
-        "y) " \
-        "VALUES(" \
-        ":wfipscell, " \
-        ":origin, " \
-        ":frequency, " \
-        ":x, " \
-        ":y)";
-
     //string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
     //    "wfipscell INTEGER," \
     //    "origin INTEGER,"
-    //    "frequency INTEGER)";
+    //    "frequency INTEGER, " \
+    //    "x REAL," \
+    //    "y REAL)";
 
     //string insertSQLString = "INSERT INTO firesheds(" \
     //    "wfipscell, " \
     //    "origin, " \
-    //    "frequency) " \
+    //    "frequency, " \
+    //    "x, " \
+    //    "y) " \
     //    "VALUES(" \
     //    ":wfipscell, " \
     //    ":origin, " \
-    //    ":frequency)";
+    //    ":frequency, " \
+    //    ":x, " \
+    //    ":y)";
+
+    string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
+        "wfipscell INTEGER," \
+        "origin INTEGER,"
+        "frequency INTEGER)";
+
+    string insertSQLString = "INSERT INTO firesheds(" \
+        "wfipscell, " \
+        "origin, " \
+        "frequency) " \
+        "VALUES(" \
+        ":wfipscell, " \
+        ":origin, " \
+        ":frequency)";
 
     struct ColumnIndex
     {
@@ -727,14 +730,14 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
 
     if (rc != SQLITE_OK)
     {
-        printf("Error: Could not create schema on firesheds.db\n");
+        printf("Error: Could not create schema on firesheds.db\n\n");
         return rc;
     }
 
     rc = sqlite3_prepare_v2(db, insertSQLString.c_str(), -1, &stmt, NULL); // Prepare SQL statement
     if (rc != SQLITE_OK)
     {
-        printf("Error: Could not create prepared SQL statement\n");
+        printf("Error: Could not create prepared SQL statement\n\n");
         return rc;
     }
 
@@ -743,7 +746,7 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
 
     if (verbose)
     {
-        printf("Creating \"firesheds.db\", please wait...\n");
+        printf("Creating \"firesheds.db\", please wait...\n\n");
     }
 
     for (int wfipsCellIndex = 0; wfipsCellIndex < fireshedData.originCellsForWfipscell.size(); wfipsCellIndex++)
@@ -762,13 +765,13 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
             bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":frequency");
             rc = sqlite3_bind_int(stmt, bindColumnIndex, frequency);
 
-            wfipsData.gridData.WG_GetCellCoords(wfipscell, &cellMinX, &cellMinY, &cellMaxX, &cellMaxY);
+            //wfipsData.gridData.WG_GetCellCoords(wfipscell, &cellMinX, &cellMinY, &cellMaxX, &cellMaxY);
 
-            cellCenterX = cellMinX + cellHalfWidth;
-            cellCenterY = cellMinY + cellHalfWidth;
+            //cellCenterX = cellMinX + cellHalfWidth;
+            //cellCenterY = cellMinY + cellHalfWidth;
 
-            rc = sqlite3_bind_double(stmt, sqlite3_bind_parameter_index(stmt, ":x"), cellCenterX);
-            rc = sqlite3_bind_double(stmt, sqlite3_bind_parameter_index(stmt, ":y"), cellCenterY);
+            //rc = sqlite3_bind_double(stmt, sqlite3_bind_parameter_index(stmt, ":x"), cellCenterX);
+            //rc = sqlite3_bind_double(stmt, sqlite3_bind_parameter_index(stmt, ":y"), cellCenterY);
 
             rc = sqlite3_step(stmt);
             rc = sqlite3_reset(stmt);
@@ -784,7 +787,7 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
     // "Vacuum" the database to free unused memory
     if (verbose)
     {
-        printf("Optimizing database file size, please wait...\n");
+        printf("Optimizing database file size, please wait...\n\n");
     }
     rc = sqlite3_exec(db, "VACUUM", NULL, NULL, NULL);
 
