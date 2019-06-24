@@ -61,12 +61,12 @@ struct FireshedData
     vector<vector<unordered_map<int, int>>> wfipscellsToFireOriginsForSingleFile;
     vector<vector<int>> originCellsForWfipscell;
     unordered_map<int, int> finalIndexToWfipsCellMap;
-    vector<vector<int>> frequenciesForWfipscell;
+    vector<vector<int>> countsForWfipscellOriginPairs;
 };
 
 bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBoundingBox);
 
-void ReadFromShapeFileToMemory(const bool verbose, const int shapeFileListSize, const int shapeFileIndex, const std::string shapeFilePath, const std::string shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData);
+void ReadFromShapeFileToMemory(const bool verbose, const clock_t startClock, const int shapeFileListSize, const int shapeFileIndex, const std::string shapeFilePath, const std::string shapeFileName, FireshedData& fireshedData, WfipsData& wfipsData);
 void FillOriginDataForSingleFire(int originCell, vector<int>& rasterBuffer, const int shapeFileIndex, const int fireIndex, const OGREnvelope fireBoundingBox, FireshedData& fireshedData, WfipsData& wfipsData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
@@ -252,7 +252,7 @@ int main(int argc, char *argv[])
     fireshedData.wfipscellsToFireOriginsForSingleFile.resize(shapefileListSize);
 
     double currentProgress = 0;
-    clock_t cStartClock = clock();
+    const clock_t startClock = clock();
 
     for (int shapefileIndex = 0; shapefileIndex < shapefileListSize; shapefileIndex++)
     {
@@ -262,9 +262,9 @@ int main(int argc, char *argv[])
 
             printf("Processed %d files out of %d in\n", shapefileIndex, shapefileListSize);
             printf("    %s\n    %4.2f percent of all files to be processed are complete\n", dataPath.c_str(), currentProgress);
-            printf("    total time elapsed is %4.2f seconds\n\n", (clock() - cStartClock) / (double)CLOCKS_PER_SEC);
+            printf("    total time elapsed is %4.2f seconds\n\n", (clock() - startClock) / (double)CLOCKS_PER_SEC);
         }
-        ReadFromShapeFileToMemory(verbose, shapefileListSize, shapefileIndex, dataPath, shapefileNameList[shapefileIndex], fireshedData, wfipsData);
+        ReadFromShapeFileToMemory(verbose, startClock, shapefileListSize, shapefileIndex, dataPath, shapefileNameList[shapefileIndex], fireshedData, wfipsData);
         
     }
 
@@ -272,7 +272,7 @@ int main(int argc, char *argv[])
     {
         printf("Processed %d files out of %d in\n", shapefileListSize, shapefileListSize);
         printf("    %s\n    100 percent of all files to be processed are complete\n\n", dataPath.c_str());
-        printf("    total time elapsed is %4.2f seconds\n\n", (clock() - cStartClock) / (double)CLOCKS_PER_SEC);
+        printf("    total time elapsed is %4.2f seconds\n\n", (clock() - startClock) / (double)CLOCKS_PER_SEC);
     }
 
     ConsolidateFinalData(shapefileListSize, fireshedData);
@@ -280,14 +280,14 @@ int main(int argc, char *argv[])
 
     printf("Successfully processed all shapefiles in\n    %s\n", dataPath.c_str());
     printf("    and created \"firesheds.db\" in\n    %s\n\n", outPath.c_str());
-    printf("Total time elapsed is %4.2f seconds\n\n", (clock() - cStartClock) / (double)CLOCKS_PER_SEC);
+    printf("Total time elapsed is %4.2f seconds\n\n", (clock() - startClock) / (double)CLOCKS_PER_SEC);
     return SUCCESS;
 }
 
 /***************************************************************************
 // Shapefile Reading Function
 ***************************************************************************/
-void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, const int shapefileIndex, const std::string shapefilePath, const std::string shapefileName, FireshedData& fireshedData, WfipsData& wfipsData)
+void ReadFromShapeFileToMemory(const bool verbose, const clock_t startClock, const int shapefileListSize, const int shapefileIndex, const std::string shapefilePath, const std::string shapefileName, FireshedData& fireshedData, WfipsData& wfipsData)
 {
     OGRErr error;
     string shapefileFullPath = shapefilePath + shapefileName;
@@ -388,27 +388,31 @@ void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, 
 
     fireshedData.wfipscellsToFireOriginsForSingleFile[shapefileIndex].resize(totalFires);
 
-    int numCores = omp_get_num_procs() - 1;
-    if (numCores < 1)
+    int numThreads = omp_get_num_procs() - 1;
+    if (numThreads > 8)
     {
-        numCores = 1;
+        numThreads = 8;
+    }
+    else if (numThreads < 1)
+    {
+        numThreads = 1;
     }
 
-    omp_set_num_threads(numCores);
+    omp_set_num_threads(numThreads);
 
     vector<vector<int>> buffer;
     vector<GDALDataset*> inMemoryRaster;
     GDALDriverH hMemDriver = GDALGetDriverByName("MEM");
 
-    buffer.resize(numCores);
-    inMemoryRaster.resize(numCores);
+    buffer.resize(numThreads);
+    inMemoryRaster.resize(numThreads);
 
     char** options = nullptr;
     options = CSLSetNameValue(options, "ALL_TOUCHED", "TRUE");
 
     // Parallel
 #pragma omp parallel for shared(inMemoryRaster)
-    for (int threadIndex = 0; threadIndex < numCores; threadIndex++)
+    for (int threadIndex = 0; threadIndex < numThreads; threadIndex++)
     {
         // Create in-memory rasters
         GDALDatasetH hRasterDS = GDALCreate(hMemDriver, "", nBufXSize, nBufYSize, nBandCount, eType, NULL);
@@ -416,8 +420,7 @@ void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, 
         buffer[threadIndex].resize(nBufXSize*nBufYSize);
     }
 
-#pragma omp parallel for shared(firesProcessed, currentProgress)
-  
+#pragma omp parallel for shared(firesProcessed)
     for (int fireIndex = 0; fireIndex < totalFires; fireIndex++)
     {
         int threadID = omp_get_thread_num();
@@ -472,7 +475,7 @@ void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, 
 #pragma omp atomic
         firesProcessed++;
 
-        if (verbose && (firesProcessed % 10000) == 0)
+        if (verbose && (firesProcessed % 1000) == 0)
         {
         //Critical Section
 #pragma omp critical
@@ -483,6 +486,7 @@ void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, 
                 printf("Processed %d files out of %d in\n", shapefileIndex, shapefileListSize);
                 currentProgress = (shapefileIndex / (shapefileListSize * 1.0)) * 100.00;
                 printf("    %s\n    %4.2f percent of all files to be processed are complete\n\n", shapefilePath.c_str(), currentProgress);
+                printf("    total time elapsed is %4.2f seconds\n\n", (clock() - startClock) / (double)CLOCKS_PER_SEC);
             }
         //End Critical Section
         }
@@ -492,7 +496,7 @@ void ReadFromShapeFileToMemory(const bool verbose, const int shapefileListSize, 
 
     // Parallel
 #pragma omp parallel for shared(inMemoryRaster)
-    for (int threadIndex = 0; threadIndex < numCores; threadIndex++)
+    for (int threadIndex = 0; threadIndex < numThreads; threadIndex++)
     {
         // Destroy in-memory rasters
         GDALClose(inMemoryRaster[threadIndex]);
@@ -602,7 +606,7 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
     int wfipscellPrevious = -1;
     int originPrevious = -1;
     int wfipsCellIndex = -1;
-    int frequency = 1;
+    int count = 1;
 
     for (int shapeFileIndex = 0; shapeFileIndex < num_shape_files; shapeFileIndex++)
     {
@@ -635,8 +639,8 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
             fireshedData.finalIndexToWfipsCellMap.insert(std::make_pair(wfipsCellIndex, wfipscell));
             vector<int> originVectorRow;
             fireshedData.originCellsForWfipscell.push_back(originVectorRow);
-            vector<int> frequencyVectorRow;
-            fireshedData.frequenciesForWfipscell.push_back(frequencyVectorRow);
+            vector<int> countVectorRow;
+            fireshedData.countsForWfipscellOriginPairs.push_back(countVectorRow);
         }
         if (originPrevious != origin) // Origin changed
         {
@@ -646,14 +650,14 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
 
         if (originChanged || wfipsCellChanged) // Add element to current vector row
         {
-            frequency = 1;
+            count = 1;
             fireshedData.originCellsForWfipscell[wfipsCellIndex].push_back(origin);
-            fireshedData.frequenciesForWfipscell[wfipsCellIndex].push_back(frequency);
+            fireshedData.countsForWfipscellOriginPairs[wfipsCellIndex].push_back(count);
         }
-        else // Increment frequency and overwrite element containing frequency count for current wfipscell
+        else // Increment count and overwrite element containing count for current wfipscell
         {
-            frequency++;
-            fireshedData.frequenciesForWfipscell[wfipsCellIndex].back() = frequency;
+            count++;
+            fireshedData.countsForWfipscellOriginPairs[wfipsCellIndex].back() = count;
         }
     }
 
@@ -670,52 +674,40 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
     //string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
     //    "wfipscell INTEGER," \
     //    "origin INTEGER,"
-    //    "frequency INTEGER, " \
+    //    "count INTEGER, " \
     //    "x REAL," \
     //    "y REAL)";
 
     //string insertSQLString = "INSERT INTO firesheds(" \
     //    "wfipscell, " \
     //    "origin, " \
-    //    "frequency, " \
+    //    "count, " \
     //    "x, " \
     //    "y) " \
     //    "VALUES(" \
     //    ":wfipscell, " \
     //    ":origin, " \
-    //    ":frequency, " \
+    //    ":count, " \
     //    ":x, " \
     //    ":y)";
 
     string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
         "wfipscell INTEGER," \
         "origin INTEGER,"
-        "frequency INTEGER)";
+        "count INTEGER)";
 
     string insertSQLString = "INSERT INTO firesheds(" \
         "wfipscell, " \
         "origin, " \
-        "frequency) " \
+        "count) " \
         "VALUES(" \
         ":wfipscell, " \
         ":origin, " \
-        ":frequency)";
-
-    struct ColumnIndex
-    {
-        enum ColumnIndexEnum
-        {
-            wfipscell = 1,
-            origin = 2,
-            frequency = 3,
-            x = 4,
-            y = 5
-        };
-    };
+        ":count)";
 
     int wfipscell = -1;
     int bindColumnIndex = -1;
-    int frequency = -1;
+    int count = -1;
     int origin = -1;
     int err = -1;
     double cellCenterX = -1;
@@ -761,9 +753,9 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
             bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":origin");
             rc = sqlite3_bind_int(stmt, bindColumnIndex, origin);
 
-            frequency = fireshedData.frequenciesForWfipscell[wfipsCellIndex][originCellIndex];
-            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":frequency");
-            rc = sqlite3_bind_int(stmt, bindColumnIndex, frequency);
+            count = fireshedData.countsForWfipscellOriginPairs[wfipsCellIndex][originCellIndex];
+            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":count");
+            rc = sqlite3_bind_int(stmt, bindColumnIndex, count);
 
             //wfipsData.gridData.WG_GetCellCoords(wfipscell, &cellMinX, &cellMinY, &cellMaxX, &cellMaxY);
 
