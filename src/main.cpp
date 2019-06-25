@@ -57,11 +57,12 @@ struct WfipsData
 
 struct FireshedData
 {
-    vector<int> fireNumbers;
+    //vector<int> fireNumbers;
     vector<vector<unordered_map<int, int>>> wfipscellsToFireOriginsForSingleFile;
     vector<vector<int>> originCellsForWfipscell;
     unordered_map<int, int> finalIndexToWfipsCellMap;
-    vector<vector<int>> countsForWfipscellOriginPairs;
+    vector<vector<int>> numWfipscellOriginPairs;
+    unordered_map<int, int> finalOriginCellToTotalPairCountMap;
 };
 
 bool BoundingBoxCheck(SBoundingBox innerBoundingBox, struct SBoundingBox outerBoundingBox);
@@ -599,14 +600,15 @@ void FillOriginDataForSingleFire(int origin, vector<int>& rasterBuffer, const in
 
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
 {
-    multiset<pair<int, int>> totalWfipscellsToFireOrigins;
-
+    multiset<pair<int, int>> totalWfipscellsToFireOriginPairs;
+    vector<pair<int, int>> totalPairsForSingleOrigin;
     int wfipscell = -1;
     int origin = -1;
     int wfipscellPrevious = -1;
     int originPrevious = -1;
     int wfipsCellIndex = -1;
-    int count = 1;
+    int numPairs = -1;
+    int numTotalPairs = -1;
 
     for (int shapeFileIndex = 0; shapeFileIndex < num_shape_files; shapeFileIndex++)
     {
@@ -617,13 +619,13 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
             {
                 wfipscell = iterator->first;
                 origin = iterator->second;
-                totalWfipscellsToFireOrigins.insert(std::make_pair(wfipscell, origin));
+                totalWfipscellsToFireOriginPairs.insert(std::make_pair(wfipscell, origin));
             }
         }
         fireshedData.wfipscellsToFireOriginsForSingleFile[shapeFileIndex].clear();
     }
 
-    for (auto iterator = totalWfipscellsToFireOrigins.begin(); iterator != totalWfipscellsToFireOrigins.end(); iterator++)
+    for (auto iterator = totalWfipscellsToFireOriginPairs.begin(); iterator != totalWfipscellsToFireOriginPairs.end(); iterator++)
     {
         wfipscell = iterator->first;
         origin = iterator->second;
@@ -639,8 +641,8 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
             fireshedData.finalIndexToWfipsCellMap.insert(std::make_pair(wfipsCellIndex, wfipscell));
             vector<int> originVectorRow;
             fireshedData.originCellsForWfipscell.push_back(originVectorRow);
-            vector<int> countVectorRow;
-            fireshedData.countsForWfipscellOriginPairs.push_back(countVectorRow);
+            vector<int> numPairsVectorRow;
+            fireshedData.numWfipscellOriginPairs.push_back(numPairsVectorRow);
         }
         if (originPrevious != origin) // Origin changed
         {
@@ -650,18 +652,32 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
 
         if (originChanged || wfipsCellChanged) // Add element to current vector row
         {
-            count = 1;
+            numPairs = 1;
             fireshedData.originCellsForWfipscell[wfipsCellIndex].push_back(origin);
-            fireshedData.countsForWfipscellOriginPairs[wfipsCellIndex].push_back(count);
+            fireshedData.numWfipscellOriginPairs[wfipsCellIndex].push_back(numPairs);
         }
-        else // Increment count and overwrite element containing count for current wfipscell
+        else // Increment count of pairs and overwrite element containing count for current wfipscell
         {
-            count++;
-            fireshedData.countsForWfipscellOriginPairs[wfipsCellIndex].back() = count;
+            numPairs++;
+            fireshedData.numWfipscellOriginPairs[wfipsCellIndex].back() = numPairs;
         }
     }
 
-    totalWfipscellsToFireOrigins.clear();
+    for (int wfipsCellIndex = 0; wfipsCellIndex < fireshedData.finalIndexToWfipsCellMap.size(); wfipsCellIndex++)
+    {
+        int wfipscell = fireshedData.finalIndexToWfipsCellMap.at(wfipsCellIndex);
+        for (int originCellIndex = 0; originCellIndex < fireshedData.originCellsForWfipscell[wfipsCellIndex].size(); originCellIndex++)
+        {
+            origin = fireshedData.originCellsForWfipscell[wfipsCellIndex][originCellIndex];
+            if (origin == wfipscell)
+            {
+                int numTotalPairs = fireshedData.numWfipscellOriginPairs[wfipsCellIndex][originCellIndex];
+                fireshedData.finalOriginCellToTotalPairCountMap.insert(std::make_pair(origin, numTotalPairs));
+            }
+        }
+    }
+
+    totalWfipscellsToFireOriginPairs.clear();
 }
 
 int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& fireshedData, WfipsData& wfipsData)
@@ -674,40 +690,44 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
     //string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
     //    "wfipscell INTEGER," \
     //    "origin INTEGER,"
-    //    "count INTEGER, " \
+    //    "num_pairs INTEGER, " \
     //    "x REAL," \
     //    "y REAL)";
 
     //string insertSQLString = "INSERT INTO firesheds(" \
     //    "wfipscell, " \
     //    "origin, " \
-    //    "count, " \
+    //    "num_pairs, " \
     //    "x, " \
     //    "y) " \
     //    "VALUES(" \
     //    ":wfipscell, " \
     //    ":origin, " \
-    //    ":count, " \
+    //    ":num_pairs, " \
     //    ":x, " \
     //    ":y)";
 
     string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
-        "wfipscell INTEGER," \
-        "origin INTEGER,"
-        "count INTEGER)";
+        "wfipscell INTEGER, " \
+        "origin INTEGER, " \
+        "num_pairs INTEGER, " \
+        "total_pairs INTEGER)";
 
     string insertSQLString = "INSERT INTO firesheds(" \
         "wfipscell, " \
         "origin, " \
-        "count) " \
+        "num_pairs," \
+        "total_pairs) " \
         "VALUES(" \
         ":wfipscell, " \
         ":origin, " \
-        ":count)";
+        ":num_pairs, " \
+        ":total_pairs)";
 
     int wfipscell = -1;
     int bindColumnIndex = -1;
-    int count = -1;
+    int numPairs = -1;
+    int totalPairs = -1;
     int origin = -1;
     int err = -1;
     double cellCenterX = -1;
@@ -753,9 +773,13 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
             bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":origin");
             rc = sqlite3_bind_int(stmt, bindColumnIndex, origin);
 
-            count = fireshedData.countsForWfipscellOriginPairs[wfipsCellIndex][originCellIndex];
-            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":count");
-            rc = sqlite3_bind_int(stmt, bindColumnIndex, count);
+            numPairs = fireshedData.numWfipscellOriginPairs[wfipsCellIndex][originCellIndex];
+            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":num_pairs");
+            rc = sqlite3_bind_int(stmt, bindColumnIndex, numPairs);
+
+            totalPairs = fireshedData.finalOriginCellToTotalPairCountMap.find(origin)->second;
+            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":total_pairs");
+            rc = sqlite3_bind_int(stmt, bindColumnIndex, totalPairs);
 
             //wfipsData.gridData.WG_GetCellCoords(wfipscell, &cellMinX, &cellMinY, &cellMaxX, &cellMaxY);
 
