@@ -9,9 +9,6 @@ double MyPolygonUtility::Direction(const MyPoint2D& gridPoint, const MyPoint2D& 
     // calculates sweep direction for angle determination
     double zangle = 999.9, xDiff, ydiff;
 
-    // xdiff = xpt1 - startx;
-    // ydiff = ypt1 - starty;
-
     xDiff = FirePerimeterPoint.X - gridPoint.X;
     ydiff = FirePerimeterPoint.Y - gridPoint.Y;
 
@@ -52,8 +49,7 @@ double MyPolygonUtility::Direction(const MyPoint2D& gridPoint, const MyPoint2D& 
 
 bool MyPolygonUtility::IsOverlapping(const MyPoint2D& gridPoint, vector<MyPoint2D>& CurrentFirePerimeter)
 {
-    // determines if point is inside or outside a fire polygon (CurrentFire)
-    //long NumVertex = GetNumPoints(CurrentFire);
+    // determines if point is inside or outside a fire polygon (CurrentFirePerimeter)
     long NumVertex = CurrentFirePerimeter.size();
     long count = 0;
     long count1 = 0;
@@ -61,14 +57,10 @@ bool MyPolygonUtility::IsOverlapping(const MyPoint2D& gridPoint, vector<MyPoint2
     bool inside = false;
     double angleA = 0.0, angleB;
     double cumulativeAngle = 0.0, angleDifference;
-    //double gridPointX = gridPoint.X;
-    //double gridPointY = gridPoint.Y;
 
     MyPoint2D firePerimeterPoint;
     while (count < NumVertex) // make sure that startx, starty != x[0]y[0]
     {
-        //Sxpt = GetPerimeter1Value(CurrentFire, count, XCOORD);
-        //Sypt = GetPerimeter1Value(CurrentFire, count, YCOORD);
         firePerimeterPoint.X = CurrentFirePerimeter[count].X;
         firePerimeterPoint.Y = CurrentFirePerimeter[count].Y;
         angleA = Direction(gridPoint, firePerimeterPoint);
@@ -90,8 +82,6 @@ bool MyPolygonUtility::IsOverlapping(const MyPoint2D& gridPoint, vector<MyPoint2
             count2 = count1;
         }
 
-        //Sxpt = GetPerimeter1Value(CurrentFire, count2, XCOORD);
-        //Sypt = GetPerimeter1Value(CurrentFire, count2, YCOORD);
         firePerimeterPoint.X = CurrentFirePerimeter[count2].X;
         firePerimeterPoint.Y = CurrentFirePerimeter[count2].Y;
 

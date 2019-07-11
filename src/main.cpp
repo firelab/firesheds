@@ -488,7 +488,6 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                     if (!((AreClose(firstPt.X, lastPt.X)) && (AreClose(firstPt.Y, lastPt.Y))))
                     {
                         PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString.push_back(firstPt);
-                        //printf("Closed linestring on fire %d, multipolygon %d, polygon polygonIndex %d\n", fireIndex, multiPolygonIndex, polygonIndex);
                     }
 
                     SBoundingBox fireBoundingBox = GetBoundingBox(PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
@@ -547,24 +546,18 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                                             {
                                                 if ((xOffsetIndex == 0) || (xOffsetIndex == numSteps - 1))
                                                 {
-                                                    //printf("Checking row %d, col %d!\n", xOffsetIndex, yOffsetIndex);
                                                     isIntersecting = MyPolygonUtility::IsOverlapping(testPoint, PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
                                                     if (isIntersecting)
                                                     {
-                                                        //printf("Intersection found for fire %d!\n", fireIndex);
-                                                        //printf("exiting yOffset loop\n");
                                                         break; // leave yOffset loop
                                                     }
                                                 }
                                             }
                                             else
                                             {
-                                                //printf("Checking row %d, col %d\n", xOffsetIndex, yOffsetIndex);
                                                 isIntersecting = MyPolygonUtility::IsOverlapping(testPoint, PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
                                                 if (isIntersecting)
                                                 {
-                                                    //printf("Intersection found for fire %d!\n", fireIndex);
-                                                    //printf("exiting yOffset loop\n");
                                                     break; // leave yOffset loop
                                                 }
                                             }
@@ -572,14 +565,11 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                                     }
                                     else
                                     {
-                                        // Leave xOffset for loop
-                                        //printf("exiting xOffset loop\n");
-                                        break;
+                                        break;  // Leave xOffset for loop
                                     }
                                 }
                                 if (isIntersecting)
                                 {
-                                    //printf("Adding intersection for fire %d to map\n", fireIndex);
                                     tempTotalWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
                                     tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
                                 }
@@ -683,6 +673,7 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
         fireshedData.wfipscellsToFireOriginsForSingleFile[shapeFileIndex].clear();
     }
 
+    // Get the data for num_pairs field
     for (auto iterator = totalWfipscellsToFireOriginPairs.begin(); iterator != totalWfipscellsToFireOriginPairs.end(); iterator++)
     {
         wfipscell = iterator->first;
@@ -721,13 +712,14 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
         }
     }
 
+    // Get the data for total_for_origin field
     for (int wfipsCellIndex = 0; wfipsCellIndex < fireshedData.finalIndexToWfipsCellMap.size(); wfipsCellIndex++)
     {
         int wfipscell = fireshedData.finalIndexToWfipsCellMap.at(wfipsCellIndex);
         for (int originCellIndex = 0; originCellIndex < fireshedData.originCellsForWfipscell[wfipsCellIndex].size(); originCellIndex++)
         {
             origin = fireshedData.originCellsForWfipscell[wfipsCellIndex][originCellIndex];
-            if (origin == wfipscell)
+            if (origin == wfipscell) // Fire started in that cell
             {
                 int numTotalPairs = fireshedData.numWfipscellOriginPairs[wfipsCellIndex][originCellIndex];
                 fireshedData.finalOriginCellToTotalPairCountMap.insert(std::make_pair(origin, numTotalPairs));
@@ -844,6 +836,11 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
     rc = sqlite3_exec(db, "END TRANSACTION", NULL, NULL, &sqlErrMsg);
     rc = sqlite3_exec(db, "PRAGMA SYNCHRONOUS=ON", NULL, NULL, NULL);
 
+    //create indices
+    printf("Creating indices on firesheds...\n");
+    rc = sqlite3_exec(db, "CREATE INDEX idx_firesheds_wfipscell ON firesheds(wfipscell ASC)",
+        NULL, NULL, &sqlErrMsg);
+
     // "Vacuum" the database to free unused memory
     if (verbose)
     {
@@ -852,6 +849,8 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
     rc = sqlite3_exec(db, "VACUUM", NULL, NULL, NULL);
 
     rc = sqlite3_close(db);
+
+    sqlite3_free(sqlErrMsg);
 
     return rc;
 }
