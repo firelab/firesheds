@@ -37,7 +37,6 @@ using std::vector;
 struct WfipsData
 {
     OGRSpatialReference spatialReference;
-    vector<MyPoint2D> cellCentroids;
     vector<SBoundingBox> cellBoundingBoxes;
     CWfipsGridData gridData;
 
@@ -62,7 +61,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
 int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& fireshedData, WfipsData& wfipsData);
-void PrintErrorText();
+void PrintUsageErrorText();
 
 bool AreClose(double a, double b);
 
@@ -92,7 +91,7 @@ int main(int argc, char *argv[])
         std::transform(verboseTest.begin(), verboseTest.end(), verboseTest.begin(), ::tolower);
         if (verboseTest == "verbose")
         {
-            PrintErrorText();
+            PrintUsageErrorText();
             return EXIT_FAILURE;
         }
         dataPath = argv[1];
@@ -125,13 +124,13 @@ int main(int argc, char *argv[])
         }
         else
         {
-            PrintErrorText();
+            PrintUsageErrorText();
             return EXIT_FAILURE;
         }
     }
     else
     {
-        PrintErrorText();
+        PrintUsageErrorText();
         return EXIT_FAILURE;
     }
 
@@ -172,7 +171,7 @@ int main(int argc, char *argv[])
                 std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
                 if (extension == ".shp")
                 {
-                    //printf("%s\n", temp.c_str());
+                    //printf("%s\n", fileName.c_str());
                     shapefileNameList.push_back(fileName);
                     shapefilePathList.push_back(dataPath + fileName);
                 }
@@ -213,8 +212,7 @@ int main(int argc, char *argv[])
     char *MapESRIProjStrings[] =
     {
         "",
-        "PROJCS[\"Albers\",GEOGCS[\"GCS_North_American_1983\",DATUM[\"D_North_American_1983\",SPHEROID[\"GRS_1980\",6378137,298.257222101]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Albers\"],PARAMETER[\"standard_parallel_1\",29.5],PARAMETER[\"standard_parallel_2\",45.5],PARAMETER[\"latitude_of_origin\",23],PARAMETER[\"central_meridian\",-96],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"METERS\",1]]",
-        "PROJCS[\"WGS 84 / Pseudo - Mercator\",GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137,298.257223563]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Mercator\"],PARAMETER[\"central_meridian\",0],PARAMETER[\"scale_factor\",1],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"Meter\",1]]"
+        "PROJCS[\"Albers\",GEOGCS[\"GCS_North_American_1983\",DATUM[\"D_North_American_1983\",SPHEROID[\"GRS_1980\",6378137,298.257222101]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Albers\"],PARAMETER[\"standard_parallel_1\",29.5],PARAMETER[\"standard_parallel_2\",45.5],PARAMETER[\"latitude_of_origin\",23],PARAMETER[\"central_meridian\",-96],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"METERS\",1]]"
     };
 
     CPLStringList papszPrj5070;
@@ -280,13 +278,6 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
     {
         string shapefileFullPath = shapefilePath + shapefileNameList[shapefileIndex];
         GDALDataset *poShapefileDS = static_cast<GDALDataset*>(GDALOpenEx(shapefileFullPath.c_str(), GDAL_OF_READONLY, NULL, NULL, NULL));
-
-        char *MapESRIProjStrings[] =
-        {
-            "",
-            "PROJCS[\"Albers\",GEOGCS[\"GCS_North_American_1983\",DATUM[\"D_North_American_1983\",SPHEROID[\"GRS_1980\",6378137,298.257222101]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Albers\"],PARAMETER[\"standard_parallel_1\",29.5],PARAMETER[\"standard_parallel_2\",45.5],PARAMETER[\"latitude_of_origin\",23],PARAMETER[\"central_meridian\",-96],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"METERS\",1]]",
-           "PROJCS[\"WGS 84 / Pseudo - Mercator\",GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137,298.257223563]],PRIMEM[\"Greenwich\",0],UNIT[\"Degree\",0.017453292519943295]],PROJECTION[\"Mercator\"],PARAMETER[\"central_meridian\",0],PARAMETER[\"scale_factor\",1],PARAMETER[\"false_easting\",0],PARAMETER[\"false_northing\",0],UNIT[\"Meter\",1]]"
-        };
 
         OGRLayer  *poLayer = poShapefileDS->GetLayer(0);
         OGRFeatureDefn *poFDefn = poLayer->GetLayerDefn();
@@ -510,8 +501,8 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                             cellIndex = wfipsData.gridData.GetWfipsCellIndex(row, col);
                             origin = fireOriginCells[fireIndex];
 
-                            bool isCellAreadyBurned = !(tempSingleFireWfipscellsToFireOrigins.find(cellIndex) == tempSingleFireWfipscellsToFireOrigins.end());
-                            if (!isCellAreadyBurned)
+                            bool isCellAlreadyBurned = !(tempSingleFireWfipscellsToFireOrigins.find(cellIndex) == tempSingleFireWfipscellsToFireOrigins.end());
+                            if (!isCellAlreadyBurned)
                             {
                                 SBoundingBox cellBoundingBox = wfipsData.cellBoundingBoxes[cellIndex];
 
@@ -637,11 +628,6 @@ int FillWfipsData(WfipsData& wfipsData, std::string dataPath)
                 &currentCellBoundingBox.maxX,
                 &currentCellBoundingBox.maxY);
             wfipsData.cellBoundingBoxes.push_back(currentCellBoundingBox);
-            MyPoint2D cellCentroid;
-            //cellCenteroid.assignSpatialReference(&spatialReference);
-            cellCentroid.X = currentCellBoundingBox.minX + cellHalfWidth;
-            cellCentroid.Y = currentCellBoundingBox.minY + cellHalfWidth;
-            wfipsData.cellCentroids.push_back(cellCentroid);
         }
     }
 
@@ -692,7 +678,7 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
             vector<int> numPairsVectorRow;
             fireshedData.numWfipscellOriginPairs.push_back(numPairsVectorRow);
         }
-        if (originPrevious != origin) // Origin changed
+        if (origin != originPrevious) // Origin changed
         {
             originChanged = true;
             originPrevious = origin;
@@ -828,8 +814,6 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
     }
 
     rc = sqlite3_reset(stmt);
-
-    rc = sqlite3_reset(stmt);
     rc = sqlite3_finalize(stmt);
 
     rc = sqlite3_exec(db, "END TRANSACTION", NULL, NULL, &sqlErrMsg);
@@ -890,7 +874,7 @@ SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString)
     return theBoundingBox;
 }
 
-void PrintErrorText()
+void PrintUsageErrorText()
 {
     printf("Error: need path to shapefiles as first argument");
     printf("\n    optional second argument specifies output path");
