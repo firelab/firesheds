@@ -94,7 +94,7 @@ int main(int argc, char *argv[])
             printf("Error: need path to shapefiles as first argument");
             printf("\n    optional second argument specifies output path");
             printf("\n    if only the input path is provided, output path will be the same");
-            printf("\n    for progress info on console, enter \"verbose\" as last argument");
+            printf("\n    for progress info on console, enter \"verbose\" as last argument\n");
             return EXIT_FAILURE;
         }
         dataPath = argv[1];
@@ -130,7 +130,7 @@ int main(int argc, char *argv[])
             printf("Error: need path to shapefiles as first argument");
             printf("\n    optional second argument specifies output path");
             printf("\n    if only the input path is provided, output path will be the same");
-            printf("\n    for progress info on console, enter \"verbose\" as last argument");
+            printf("\n    for progress info on console, enter \"verbose\" as last argument\n");
             return EXIT_FAILURE;
         }
     }
@@ -139,7 +139,7 @@ int main(int argc, char *argv[])
         printf("Error: need path to shapefiles as first argument");
         printf("\n    optional second argument specifies output path");
         printf("\n    if only the input path is provided, output path will be the same");
-        printf("\n    for progress info on console, enter \"verbose\" as last argument");
+        printf("\n    for progress info on console, enter \"verbose\" as last argument\n");
         return EXIT_FAILURE;
     }
 
