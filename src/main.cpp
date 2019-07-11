@@ -458,15 +458,18 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
         int numFires = PolygonLayer.size();
         const double cellWidthInMeters = 2000.0;
 
-        unordered_multimap<int, int> tempWfipscellsToFireOrigins;
-
+        unordered_multimap<int, int> tempTotalWfipscellsToFireOrigins;
+       
         for (int fireIndex = 0; fireIndex < PolygonLayer.size(); fireIndex++)
         {
             //fireNumber = fireNumbers[fireIndex];
             int origin = fireOriginCells[fireIndex];
 
-            // Always assume origin is in
-            tempWfipscellsToFireOrigins.insert(std::make_pair(origin, origin));
+            unordered_map<int, int> tempSingleFireWfipscellsToFireOrigins; // used to check if cell is already burned by fire
+
+             // Always assume origin is in
+            tempTotalWfipscellsToFireOrigins.insert(std::make_pair(origin, origin));
+            tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(origin, origin));
 
             int numMultiPolygons = PolygonLayer[fireIndex].PolygonsOfFeature.size();
             for (int multiPolygonIndex = 0; multiPolygonIndex < numMultiPolygons; multiPolygonIndex++)
@@ -509,7 +512,8 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                             cellIndex = wfipsData.gridData.GetWfipsCellIndex(row, col);
                             origin = fireOriginCells[fireIndex];
 
-                            if (cellIndex != origin)
+                            bool isCellAreadyBurned = !(tempSingleFireWfipscellsToFireOrigins.find(cellIndex) == tempSingleFireWfipscellsToFireOrigins.end());
+                            if (!isCellAreadyBurned)
                             {
                                 SBoundingBox cellBoundingBox = wfipsData.cellBoundingBoxes[cellIndex];
 
@@ -576,13 +580,15 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                                 if (isIntersecting)
                                 {
                                     //printf("Adding intersection for fire %d to map\n", fireIndex);
-                                    tempWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
+                                    tempTotalWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
+                                    tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
                                 }
                             }
                         }
                     }
                 }
             }
+            tempSingleFireWfipscellsToFireOrigins.clear();
         }
 
         int wfipscell = -1;
@@ -590,7 +596,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
 
         #pragma omp critical
         {
-            for (auto iterator = tempWfipscellsToFireOrigins.begin(); iterator != tempWfipscellsToFireOrigins.end(); iterator++)
+            for (auto iterator = tempTotalWfipscellsToFireOrigins.begin(); iterator != tempTotalWfipscellsToFireOrigins.end(); iterator++)
             {
                 wfipscell = iterator->first;
                 origin = iterator->second;
@@ -598,7 +604,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
             }
         }
 
-        tempWfipscellsToFireOrigins.clear();
+        tempTotalWfipscellsToFireOrigins.clear();
         //fireNumbers.clear();
         fireOriginCells.clear();
 
@@ -756,19 +762,6 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
         ":num_pairs, " \
         ":total_for_origin)";
 
-    string getCorrectTotalsSQLString = "SELECT origin, MAX(num_pairs) " \
-        "FROM firesheds " \
-        "WHERE num_pairs > total_for_origin " \
-        "GROUP BY origin";
-
-    string updateSelfOriginsNumPairsSQLString = "UPDATE firesheds " \
-        "SET num_pairs = :correct_total "
-        "WHERE origin = :origin AND wfipscell = :origin";
-
-    string updateTotalsForOriginsSQLString = "UPDATE firesheds " \
-        "SET total_for_origin = :correct_total " \
-        "WHERE origin = :origin";
-
     int wfipscell = -1;
     int bindColumnIndex = -1;
     int numPairs = -1;
@@ -845,77 +838,8 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
 
     rc = sqlite3_reset(stmt);
 
-    rc = sqlite3_prepare_v2(db, getCorrectTotalsSQLString.c_str(), -1, &stmt, NULL); // Prepare SQL statement
-    if (rc != SQLITE_OK)
-    {
-        printf("Error: Could not create prepare SQL statement to get corrected totals\n\n");
-        return rc;
-    }
-
-    struct ReadColumn
-    {
-        enum
-        {
-            origin = 0,
-            correct_total = 1
-        };
-    };
-
-    int correct_total = 0;
-    while (sqlite3_step(stmt) == SQLITE_ROW)
-    {
-        origin = sqlite3_column_int(stmt, ReadColumn::origin);
-        correct_total = sqlite3_column_int(stmt, ReadColumn::correct_total);
-        originsToCorrectTotalsMap.insert(std::make_pair(origin, correct_total));
-    }
-
-    sqlite3_stmt *updateSelfOriginsNumPairsStmt;
-    rc = sqlite3_prepare_v2(db, updateSelfOriginsNumPairsSQLString.c_str(), -1, &updateSelfOriginsNumPairsStmt, NULL);
-    if (rc != SQLITE_OK)
-    {
-        printf("Error: Could not create prepare SQL statement to update self origin pairs\n\n");
-        return rc;
-    }
-
-    sqlite3_stmt *updateTotalsForOriginsStmt;
-    rc = sqlite3_prepare_v2(db, updateTotalsForOriginsSQLString.c_str(), -1, &updateTotalsForOriginsStmt, NULL); // Prepare SQL statement
-    if (rc != SQLITE_OK)
-    {
-        printf("Error: Could not create prepare SQL statement to update totals for origins\n\n");
-        return rc;
-    }
-
-    if (verbose)
-    {
-        printf("Correcting erroneous data for num_pairs and total_for_origin fields\n\n");
-    }
-
-    for (auto iterator = originsToCorrectTotalsMap.begin(); iterator != originsToCorrectTotalsMap.end(); iterator++)
-    {
-        origin = iterator->first;
-        correct_total = iterator->second;
-
-        rc = sqlite3_bind_int(updateSelfOriginsNumPairsStmt, sqlite3_bind_parameter_index(updateSelfOriginsNumPairsStmt, ":origin"), origin);
-        rc = sqlite3_bind_int(updateSelfOriginsNumPairsStmt, sqlite3_bind_parameter_index(updateSelfOriginsNumPairsStmt, ":correct_total"), correct_total);
-
-        rc = sqlite3_step(updateSelfOriginsNumPairsStmt);
-        rc = sqlite3_reset(updateSelfOriginsNumPairsStmt);
-
-        rc = sqlite3_bind_int(updateTotalsForOriginsStmt, sqlite3_bind_parameter_index(updateTotalsForOriginsStmt, ":origin"), origin);
-        rc = sqlite3_bind_int(updateTotalsForOriginsStmt, sqlite3_bind_parameter_index(updateTotalsForOriginsStmt, ":correct_total"), correct_total);
-
-        rc = sqlite3_step(updateTotalsForOriginsStmt);
-        rc = sqlite3_reset(updateTotalsForOriginsStmt);
-    }
-
     rc = sqlite3_reset(stmt);
     rc = sqlite3_finalize(stmt);
-
-    rc = sqlite3_reset(updateSelfOriginsNumPairsStmt);
-    rc = sqlite3_finalize(updateSelfOriginsNumPairsStmt);
-
-    rc = sqlite3_reset(updateTotalsForOriginsStmt);
-    rc = sqlite3_finalize(updateTotalsForOriginsStmt);
 
     rc = sqlite3_exec(db, "END TRANSACTION", NULL, NULL, &sqlErrMsg);
     rc = sqlite3_exec(db, "PRAGMA SYNCHRONOUS=ON", NULL, NULL, NULL);
