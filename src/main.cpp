@@ -149,9 +149,9 @@ int main(int argc, char *argv[])
     if ((outPath.back() != '/') && (outPath.back() != '\\'))
     {
 #ifdef WIN32
-        outPath.push_back('//');
+        outPath.push_back('\\');
 #else
-        outPath.push_back('\');
+        outPath.push_back('/');
 #endif
     }
   
