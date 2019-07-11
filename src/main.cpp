@@ -58,7 +58,7 @@ struct FireshedData
 
 SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString);
 
-void ReadShapeFilesToMemory(const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData);
+void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
 int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& fireshedData, WfipsData& wfipsData);
@@ -247,8 +247,8 @@ int main(int argc, char *argv[])
     fireshedData.wfipscellsToFireOriginsForSingleFile.resize(shapefileListSize);
 
     const clock_t startClock = clock();
-    const int numCellEdgeDivisions = 15;
-    ReadShapeFilesToMemory(verbose, startClock, numCellEdgeDivisions, dataPath, shapefileNameList, fireshedData, wfipsData);
+    const int numCellEdgeDivisions = 15; // Number of sudivisions along edges of wfips cells to be used as test points for point in poly
+    ReadShapefilesToMemory(verbose, startClock, numCellEdgeDivisions, dataPath, shapefileNameList, fireshedData, wfipsData);
 
     ConsolidateFinalData(shapefileListSize, fireshedData);
     CreateFireShedDB(verbose, db, fireshedData, wfipsData);
@@ -262,7 +262,7 @@ int main(int argc, char *argv[])
 /***************************************************************************
 // Shapefile Reading Function
 ***************************************************************************/
-void ReadShapeFilesToMemory(const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData)
+void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData)
 {
     int numThreads = omp_get_num_procs() - 1;
     if (numThreads < 1)
@@ -299,7 +299,7 @@ void ReadShapeFilesToMemory(const bool verbose, const clock_t startClock, const 
         vector<int> fireOriginCells;
 
         poLayer->ResetReading();
-
+ 
         int sizeInAcres = 0;
         int fireNumber;
 
@@ -339,6 +339,7 @@ void ReadShapeFilesToMemory(const bool verbose, const clock_t startClock, const 
                 poFeature = poLayer->GetNextFeature();
                 OGRGeometry *poGeometry;
                 poGeometry = poFeature->GetGeometryRef();
+                poGeometry->assignSpatialReference(&wfipsData.spatialReference);
 
                 for (int fieldIndex = 0; fieldIndex < numFields; fieldIndex++)
                 {
