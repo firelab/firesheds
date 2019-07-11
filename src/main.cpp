@@ -62,6 +62,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
 int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& fireshedData, WfipsData& wfipsData);
+void PrintErrorText();
 
 bool AreClose(double a, double b);
 
@@ -91,10 +92,7 @@ int main(int argc, char *argv[])
         std::transform(verboseTest.begin(), verboseTest.end(), verboseTest.begin(), ::tolower);
         if (verboseTest == "verbose")
         {
-            printf("Error: need path to shapefiles as first argument");
-            printf("\n    optional second argument specifies output path");
-            printf("\n    if only the input path is provided, output path will be the same");
-            printf("\n    for progress info on console, enter \"verbose\" as last argument\n");
+            PrintErrorText();
             return EXIT_FAILURE;
         }
         dataPath = argv[1];
@@ -127,19 +125,13 @@ int main(int argc, char *argv[])
         }
         else
         {
-            printf("Error: need path to shapefiles as first argument");
-            printf("\n    optional second argument specifies output path");
-            printf("\n    if only the input path is provided, output path will be the same");
-            printf("\n    for progress info on console, enter \"verbose\" as last argument\n");
+            PrintErrorText();
             return EXIT_FAILURE;
         }
     }
     else
     {
-        printf("Error: need path to shapefiles as first argument");
-        printf("\n    optional second argument specifies output path");
-        printf("\n    if only the input path is provided, output path will be the same");
-        printf("\n    for progress info on console, enter \"verbose\" as last argument\n");
+        PrintErrorText();
         return EXIT_FAILURE;
     }
 
@@ -149,13 +141,20 @@ int main(int argc, char *argv[])
     {
 #ifdef WIN32
         dataPath.push_back('\\');
-        outPath.push_back('\\');
 #else
         dataPath.push_back('/');
-        outPath.push_back('/');
 #endif
     }
 
+    if ((outPath.back() != '/') && (outPath.back() != '\\'))
+    {
+#ifdef WIN32
+        outPath.push_back('//');
+#else
+        outPath.push_back('\');
+#endif
+    }
+  
     vector<string> shapefileNameList;
     vector<string> shapefilePathList;
 
@@ -889,4 +888,12 @@ SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString)
     }
 
     return theBoundingBox;
+}
+
+void PrintErrorText()
+{
+    printf("Error: need path to shapefiles as first argument");
+    printf("\n    optional second argument specifies output path");
+    printf("\n    if only the input path is provided, output path will be the same");
+    printf("\n    for progress info on console, enter \"verbose\" as last argument\n");
 }
