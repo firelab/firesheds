@@ -66,6 +66,7 @@ ENDIF(SQLITE3_FOUND)
 
 ADD_EXECUTABLE(${PROJECT_NAME} 
 				"src/main.cpp"
+				"src/MyPolygon.cpp"
 				"src/WfipsGrid.cpp"
 				"src/WfipsGridData.cpp")
 
