@@ -52,7 +52,7 @@ struct FireshedData
     vector<vector<int>> originCellsForWfipscell;
     unordered_map<int, int> finalIndexToWfipsCellMap;
     vector<vector<int>> numWfipscellOriginPairs;
-    unordered_map<int, int> finalOriginCellToTotalPairCountMap;
+    map<int, int> finalOriginCellToTotalPairCountMap;
 };
 
 SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString);
@@ -60,14 +60,14 @@ SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString);
 void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
-int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& fireshedData, WfipsData& wfipsData);
+int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData, WfipsData& wfipsData);
 void PrintUsageErrorText();
 
 bool AreClose(double a, double b);
 
 static const double EPSILON = 0.000000000000000001;
 
-static const double cellHalfWidth = 1000; // 1 km
+static const double cellWidthInMeters = 2000; // 2 km
 
 int main(int argc, char *argv[])
 {
@@ -446,7 +446,6 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
         GDALClose(poShapefileDS);
 
         int numFires = PolygonLayer.size();
-        const double cellWidthInMeters = 2000.0;
 
         unordered_multimap<int, int> tempTotalWfipscellsToFireOrigins;
 
@@ -713,47 +712,49 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
     totalWfipscellsToFireOriginPairs.clear();
 }
 
-int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& fireshedData, WfipsData& wfipsData)
+int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData, WfipsData& wfipsData)
 {
     int rc = 0;
-    sqlite3_stmt *stmt;
-
+    sqlite3_stmt *fireshedsStmt;
+    sqlite3_stmt *totalsStmt;
     char *sqlErrMsg = 0;
 
-    string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds(" \
-        "wfipscell INTEGER, " \
+    string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds " \
+        "(wfipscell INTEGER, " \
         "origin INTEGER, " \
-        "num_pairs INTEGER, " \
-        "total_for_origin INTEGER)";
-
-    string insertSQLString = "INSERT INTO firesheds(" \
+        "num_pairs INTEGER)";
+    
+    string insertFireshedsSQLString = "INSERT INTO firesheds(" \
         "wfipscell, " \
         "origin, " \
-        "num_pairs," \
-        "total_for_origin) " \
-        "VALUES(" \
-        ":wfipscell, " \
+        "num_pairs) " \
+        "VALUES " \
+        "(:wfipscell, " \
         ":origin, " \
-        ":num_pairs, " \
-        ":total_for_origin)";
+        ":num_pairs)";
+
+    string createTotalFiresDBSQLString = "CREATE TABLE IF NOT EXISTS totals_for_origins " \
+        "(origin INTEGER, " \
+        "total_fires INTEGER)";
+
+    string insertTotalsFiresSQLString = "INSERT INTO totals_for_origins " \
+        "(origin, " \
+        "total_fires) " \
+        "VALUES " \
+        "(:origin, " \
+        ":total_fires)";
 
     int wfipscell = -1;
     int bindColumnIndex = -1;
     int numPairs = -1;
-    int totalForOrigin = -1;
     int origin = -1;
-    int err = -1;
-    double cellCenterX = -1;
-    double cellCenterY = -1;
-    double cellMinX = -1;
-    double cellMinY = -1;
-    double cellMaxX = -1;
-    double cellMaxY = -1;
 
-    unordered_map<int, int> originsToCorrectTotalsMap;
 
     rc = sqlite3_exec(db, "DROP TABLE IF EXISTS 'firesheds'", NULL, NULL, &sqlErrMsg);
+    rc = sqlite3_exec(db, "DROP TABLE IF EXISTS 'totals_for_origins'", NULL, NULL, &sqlErrMsg);
+
     rc = sqlite3_exec(db, createFireshedDBSQLString.c_str(), NULL, NULL, &sqlErrMsg);
+    rc = sqlite3_exec(db, createTotalFiresDBSQLString.c_str(), NULL, NULL, &sqlErrMsg);
 
     if (rc != SQLITE_OK)
     {
@@ -761,10 +762,17 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
         return rc;
     }
 
-    rc = sqlite3_prepare_v2(db, insertSQLString.c_str(), -1, &stmt, NULL); // Prepare SQL statement
+    rc = sqlite3_prepare_v2(db, insertFireshedsSQLString.c_str(), -1, &fireshedsStmt, NULL); // Prepare SQL statement
     if (rc != SQLITE_OK)
     {
-        printf("Error: Could not create prepared SQL statement\n\n");
+        printf("Error: Could not create prepare SQL statement\n\n");
+        return rc;
+    }
+
+    rc = sqlite3_prepare_v2(db, insertTotalsFiresSQLString.c_str(), -1, &totalsStmt, NULL); // Prepare SQL statement
+    if (rc != SQLITE_OK)
+    {
+        printf("Error: Could not create prepare total fires SQL statement\n\n");
         return rc;
     }
 
@@ -781,45 +789,56 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, const FireshedData& firesh
         for (int originCellIndex = 0; originCellIndex < fireshedData.originCellsForWfipscell[wfipsCellIndex].size(); originCellIndex++)
         {
             wfipscell = fireshedData.finalIndexToWfipsCellMap.at(wfipsCellIndex);
-            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":wfipscell");
-            rc = sqlite3_bind_int(stmt, bindColumnIndex, wfipscell);
+            bindColumnIndex = sqlite3_bind_parameter_index(fireshedsStmt, ":wfipscell");
+            rc = sqlite3_bind_int(fireshedsStmt, bindColumnIndex, wfipscell);
 
             origin = fireshedData.originCellsForWfipscell[wfipsCellIndex][originCellIndex];
-            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":origin");
-            rc = sqlite3_bind_int(stmt, bindColumnIndex, origin);
+            bindColumnIndex = sqlite3_bind_parameter_index(fireshedsStmt, ":origin");
+            rc = sqlite3_bind_int(fireshedsStmt, bindColumnIndex, origin);
 
             numPairs = fireshedData.numWfipscellOriginPairs[wfipsCellIndex][originCellIndex];
-            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":num_pairs");
-            rc = sqlite3_bind_int(stmt, bindColumnIndex, numPairs);
+            bindColumnIndex = sqlite3_bind_parameter_index(fireshedsStmt, ":num_pairs");
+            rc = sqlite3_bind_int(fireshedsStmt, bindColumnIndex, numPairs);
 
-            if (fireshedData.finalOriginCellToTotalPairCountMap.find(origin) == fireshedData.finalOriginCellToTotalPairCountMap.end())
-            {
-                // not found
-                totalForOrigin = -1;
-            }
-            else
-            {
-                // found
-                totalForOrigin = fireshedData.finalOriginCellToTotalPairCountMap.find(origin)->second;
-            }
-
-            bindColumnIndex = sqlite3_bind_parameter_index(stmt, ":total_for_origin");
-            rc = sqlite3_bind_int(stmt, bindColumnIndex, totalForOrigin);
-
-            rc = sqlite3_step(stmt);
-            rc = sqlite3_reset(stmt);
+            rc = sqlite3_step(fireshedsStmt);
+            rc = sqlite3_reset(fireshedsStmt);
         }
     }
 
-    rc = sqlite3_reset(stmt);
-    rc = sqlite3_finalize(stmt);
+    fireshedData.finalIndexToWfipsCellMap.clear();
+    fireshedData.originCellsForWfipscell.clear();
+    fireshedData.numWfipscellOriginPairs.clear();
+
+    rc = sqlite3_reset(fireshedsStmt);
+    rc = sqlite3_finalize(fireshedsStmt);
+
+    int totalForOrigin = -1;
+    for (auto iterator = fireshedData.finalOriginCellToTotalPairCountMap.begin(); iterator != fireshedData.finalOriginCellToTotalPairCountMap.end(); iterator++)
+    {
+        origin = iterator->first;
+        bindColumnIndex = sqlite3_bind_parameter_index(totalsStmt, ":origin");
+        rc = sqlite3_bind_int(totalsStmt, bindColumnIndex, origin);
+
+        totalForOrigin = iterator->second;
+        bindColumnIndex = sqlite3_bind_parameter_index(totalsStmt, ":total_fires");
+        rc = sqlite3_bind_int(totalsStmt, bindColumnIndex, totalForOrigin);
+
+        rc = sqlite3_step(totalsStmt);
+        rc = sqlite3_reset(totalsStmt);
+    }
+
+    rc = sqlite3_reset(totalsStmt);
+    rc = sqlite3_finalize(totalsStmt);
 
     rc = sqlite3_exec(db, "END TRANSACTION", NULL, NULL, &sqlErrMsg);
     rc = sqlite3_exec(db, "PRAGMA SYNCHRONOUS=ON", NULL, NULL, NULL);
 
     //create indices
-    printf("Creating indices on firesheds...\n");
+    printf("Creating indices on tables...\n");
     rc = sqlite3_exec(db, "CREATE INDEX idx_firesheds_wfipscell ON firesheds(wfipscell ASC)",
+        NULL, NULL, &sqlErrMsg);
+
+    rc = sqlite3_exec(db, "CREATE INDEX totals_for_origins_origin ON totals_for_origins(origin ASC)",
         NULL, NULL, &sqlErrMsg);
 
     // "Vacuum" the database to free unused memory
