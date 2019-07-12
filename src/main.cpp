@@ -153,7 +153,7 @@ int main(int argc, char *argv[])
         outPath.push_back('/');
 #endif
     }
-  
+
     vector<string> shapefileNameList;
     vector<string> shapefilePathList;
 
@@ -289,7 +289,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
         vector<int> fireOriginCells;
 
         poLayer->ResetReading();
- 
+
         int sizeInAcres = 0;
         int fireNumber;
 
@@ -449,7 +449,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
         const double cellWidthInMeters = 2000.0;
 
         unordered_multimap<int, int> tempTotalWfipscellsToFireOrigins;
-       
+
         for (int fireIndex = 0; fireIndex < PolygonLayer.size(); fireIndex++)
         {
             //fireNumber = fireNumbers[fireIndex];
@@ -488,7 +488,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                     int maxRow = 0;
                     int minCol = 0;
                     int maxCol = 0;
-                    
+
                     // Find rows and columns that correspond to the upper-left and lower-right corners of fire bounding box
                     wfipsData.gridData.GetRowColFromWfipsCell(upperLeftCell, &minRow, &minCol);
                     wfipsData.gridData.GetRowColFromWfipsCell(lowerRightCell, &maxRow, &maxCol);
@@ -517,12 +517,12 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                                 int numSteps = numEdgeCellDivisions;
                                 double stepIncreaseSize = 1.0 / (numSteps - 1);
 
-                                bool isIntersecting = false;
+                                bool isCellInFirePolygon = false;
                                 double xOffset = 0;
                                 double yOffset = 0;
                                 for (int xOffsetIndex = 0; xOffsetIndex < numSteps; xOffsetIndex++)
                                 {
-                                    if(!isIntersecting)
+                                    if (!isCellInFirePolygon)
                                     {
                                         xOffset = xMin + ((stepIncreaseSize * xOffsetIndex) * cellWidthInMeters);
                                         testPoint.X = xOffset;
@@ -536,8 +536,9 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                                             {
                                                 if ((xOffsetIndex == 0) || (xOffsetIndex == numSteps - 1))
                                                 {
-                                                    isIntersecting = MyPolygonUtility::IsOverlapping(testPoint, PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
-                                                    if (isIntersecting)
+                                                    isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
+                                                        PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
+                                                    if (isCellInFirePolygon)
                                                     {
                                                         break; // leave yOffset loop
                                                     }
@@ -545,8 +546,9 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                                             }
                                             else
                                             {
-                                                isIntersecting = MyPolygonUtility::IsOverlapping(testPoint, PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
-                                                if (isIntersecting)
+                                                isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
+                                                    PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
+                                                if (isCellInFirePolygon)
                                                 {
                                                     break; // leave yOffset loop
                                                 }
@@ -558,7 +560,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                                         break;  // Leave xOffset for loop
                                     }
                                 }
-                                if (isIntersecting)
+                                if (isCellInFirePolygon)
                                 {
                                     tempTotalWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
                                     tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
@@ -574,6 +576,9 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
         int wfipscell = -1;
         int origin = -1;
 
+        #pragma omp atomic
+        numFilesProcessed++;
+
         #pragma omp critical
         {
             for (auto iterator = tempTotalWfipscellsToFireOrigins.begin(); iterator != tempTotalWfipscellsToFireOrigins.end(); iterator++)
@@ -582,26 +587,19 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                 origin = iterator->second;
                 fireshedData.wfipscellsToFireOriginsForSingleFile[shapefileIndex].insert(std::make_pair(wfipscell, origin));
             }
-        }
 
-        tempTotalWfipscellsToFireOrigins.clear();
-        //fireNumbers.clear();
-        fireOriginCells.clear();
-
-        #pragma omp atomic
-        numFilesProcessed++;
-
-        if (verbose && (numFilesProcessed > 0))
-        {
-            #pragma omp critical
+            if (verbose)
             {
                 double currentProgress = (numFilesProcessed / (shapefileListSize * 1.0)) * 100.00;
-
                 printf("Processed %d files out of %d in\n", numFilesProcessed, shapefileListSize);
                 printf("    %s\n    %4.2f percent of all files to be processed are complete\n", shapefilePath.c_str(), currentProgress);
                 printf("    total time elapsed is %4.2f seconds\n\n", (clock() - startClock) / (double)CLOCKS_PER_SEC);
             }
         }
+
+        //fireNumbers.clear();
+        fireOriginCells.clear();
+        tempTotalWfipscellsToFireOrigins.clear();
     }
 }
 
