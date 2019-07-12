@@ -838,7 +838,7 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData
     rc = sqlite3_exec(db, "CREATE INDEX idx_firesheds_wfipscell ON firesheds(wfipscell ASC)",
         NULL, NULL, &sqlErrMsg);
 
-    rc = sqlite3_exec(db, "CREATE INDEX totals_for_origins_origin ON totals_for_origins(origin ASC)",
+    rc = sqlite3_exec(db, "CREATE UNIQUE INDEX totals_for_origins_origin ON totals_for_origins(origin ASC)",
         NULL, NULL, &sqlErrMsg);
 
     // "Vacuum" the database to free unused memory
