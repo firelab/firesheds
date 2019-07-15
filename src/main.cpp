@@ -244,7 +244,9 @@ int main(int argc, char *argv[])
     fireshedData.wfipscellsToFireOriginsForSingleFile.resize(shapefileListSize);
 
     const clock_t startClock = clock();
-    const int numCellEdgeDivisions = 15; // Number of sudivisions along edges of wfips cells to be used as test points for point in poly
+    const int numCellEdgeDivisions = 16; // Number of times to subdivide WFIPS cells (currently 2000m, makes 125m subcells) 
+                                         // to get closer to the resolution used in FSim (apparently ~135m)
+
     ReadShapefilesToMemory(verbose, startClock, numCellEdgeDivisions, dataPath, shapefileNameList, fireshedData, wfipsData);
 
     ConsolidateFinalData(shapefileListSize, fireshedData);
@@ -456,7 +458,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
 
             unordered_map<int, int> tempSingleFireWfipscellsToFireOrigins; // used to check if cell is already burned by fire
 
-             // Always assume origin is in
+             // Always assume cell containing the origin is burned by the fire
             tempTotalWfipscellsToFireOrigins.insert(std::make_pair(origin, origin));
             tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(origin, origin));
 
@@ -479,6 +481,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                         PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString.push_back(firstPt);
                     }
 
+                    // Get the bounding box for the current fire
                     SBoundingBox fireBoundingBox = GetBoundingBox(PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
                     int upperLeftCell = wfipsData.gridData.WG_GetCellIndex(fireBoundingBox.minX, fireBoundingBox.maxY);
                     int lowerRightCell = wfipsData.gridData.WG_GetCellIndex(fireBoundingBox.maxX, fireBoundingBox.minY);
@@ -500,67 +503,85 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                             cellIndex = wfipsData.gridData.GetWfipsCellIndex(row, col);
                             origin = fireOriginCells[fireIndex];
 
+                            // Below each cell within the current fire's bounding box not already marked as burned by that fire
+                            // is subdivided into numEdgeCellDivisions subcells. The nodes along the outer edges of the subcells
+                            // are then used as test points in Mark's point in poly function IsOverlapping(). We test only points
+                            // along the edge as we only need to check where the fire crosses into a WFIPS cell from another cell
+                            // as origin cells are always assumed to be burned by a fire. If any node on the edge of the subcells
+                            // for the current WFIPS cell is found to be within the fire, we mark that cell as burned and move on
+                            // to the next cell within the fire's bounding box.
+
+                            // Need to check if cell has already been burned by one of the current fire's subpolygons so as not to
+                            // count cells as being burned by the same fire more than once  
                             bool isCellAlreadyBurned = !(tempSingleFireWfipscellsToFireOrigins.find(cellIndex) == tempSingleFireWfipscellsToFireOrigins.end());
                             if (!isCellAlreadyBurned)
                             {
                                 SBoundingBox cellBoundingBox = wfipsData.cellBoundingBoxes[cellIndex];
 
-                                double xMin = cellBoundingBox.minX;
-                                double yMin = cellBoundingBox.minY;
-                                double xMax = cellBoundingBox.maxX;
-                                double yMax = cellBoundingBox.maxY;
+                                const double xMin = cellBoundingBox.minX;
+                                const double yMin = cellBoundingBox.minY;
+                                const double xMax = cellBoundingBox.maxX;
+                                const double yMax = cellBoundingBox.maxY;
 
                                 MyPoint2D testPoint;
                                 testPoint.X = xMin;
                                 testPoint.Y = yMin;
-                                int numSteps = numEdgeCellDivisions;
-                                double stepIncreaseSize = 1.0 / (numSteps - 1);
+                                const int numEdgeNodes = numEdgeCellDivisions + 1;
+                                const double nodeStepSizeInMeters = cellWidthInMeters * (1.0 / numEdgeCellDivisions);
 
                                 bool isCellInFirePolygon = false;
-                                double xOffset = 0;
-                                double yOffset = 0;
-                                for (int xOffsetIndex = 0; xOffsetIndex < numSteps; xOffsetIndex++)
+                                double xEdgeNodeCoord = 0;
+                                double yEdgeNodeCoord = 0;
+
+                                const int topEdge = 0; // yNodeIndex value for top edge of cell
+                                const int bottomEdge = numEdgeNodes - 1; // yNodeIndex value for bottom edge of WFIPS cell
+                                const int leftEdge = 0; // xNodeIndex value for left edge of cell
+                                const int rightEdge = numEdgeNodes - 1; // xNodeIndex value for right edge of WFIPS cell
+
+                                for (int xNodeIndex = 0; xNodeIndex < numEdgeNodes; xNodeIndex++)
                                 {
                                     if (!isCellInFirePolygon)
                                     {
-                                        xOffset = xMin + ((stepIncreaseSize * xOffsetIndex) * cellWidthInMeters);
-                                        testPoint.X = xOffset;
-                                        for (int yOffsetIndex = 0; yOffsetIndex < numSteps; yOffsetIndex++)
+                                        xEdgeNodeCoord = xMin + (nodeStepSizeInMeters * xNodeIndex);
+                                        testPoint.X = xEdgeNodeCoord;
+                                        for (int yNodeIndex = 0; yNodeIndex < numEdgeNodes; yNodeIndex++)
                                         {
-                                            yOffset = yMin + ((stepIncreaseSize * yOffsetIndex) * cellWidthInMeters);
-                                            testPoint.Y = yOffset;
+                                            yEdgeNodeCoord = yMin + (nodeStepSizeInMeters * yNodeIndex);
+                                            testPoint.Y = yEdgeNodeCoord;
 
-                                            // If the row is not the first or last of subdivided cell, check only points in first and last column
-                                            if ((yOffsetIndex > 0) && (yOffsetIndex < numSteps - 1))
+                                            if ((yNodeIndex == topEdge) || (yNodeIndex == bottomEdge))
                                             {
-                                                if ((xOffsetIndex == 0) || (xOffsetIndex == numSteps - 1))
+                                                // Check all subcell nodes along the cell top or bottom egdes of WFIPS cell  
+                                                isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
+                                                    PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
+                                                if (isCellInFirePolygon)
+                                                {
+                                                    break; // Leave yNode loop
+                                                }
+                                            }
+                                            else 
+                                            {
+                                                // If not along top or bottom edge of WFIPS cell, check only subcell nodes on left and right edges
+                                                if ((xNodeIndex == leftEdge) || (xNodeIndex == rightEdge))
                                                 {
                                                     isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
                                                         PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
                                                     if (isCellInFirePolygon)
                                                     {
-                                                        break; // leave yOffset loop
+                                                        break; // Leave yNode loop
                                                     }
-                                                }
-                                            }
-                                            else
-                                            {
-                                                isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
-                                                    PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
-                                                if (isCellInFirePolygon)
-                                                {
-                                                    break; // leave yOffset loop
                                                 }
                                             }
                                         }
                                     }
                                     else
                                     {
-                                        break;  // Leave xOffset for loop
+                                        break;  // Leave xNode loop
                                     }
                                 }
                                 if (isCellInFirePolygon)
                                 {
+                                    // Mark current cell as being burned by the fire
                                     tempTotalWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
                                     tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
                                 }
@@ -569,6 +590,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                     }
                 }
             }
+            // Clear list of cells burned by current fire for next loop iteration
             tempSingleFireWfipscellsToFireOrigins.clear();
         }
 
@@ -580,6 +602,7 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
 
         #pragma omp critical
         {
+            // Populate data in shared vector
             for (auto iterator = tempTotalWfipscellsToFireOrigins.begin(); iterator != tempTotalWfipscellsToFireOrigins.end(); iterator++)
             {
                 wfipscell = iterator->first;
@@ -838,7 +861,7 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData
     rc = sqlite3_exec(db, "CREATE INDEX idx_firesheds_wfipscell ON firesheds(wfipscell ASC)",
         NULL, NULL, &sqlErrMsg);
 
-    rc = sqlite3_exec(db, "CREATE UNIQUE INDEX totals_for_origins_origin ON totals_for_origins(origin ASC)",
+    rc = sqlite3_exec(db, "CREATE UNIQUE INDEX idx_totals_for_origins_origin ON totals_for_origins(origin ASC)",
         NULL, NULL, &sqlErrMsg);
 
     // "Vacuum" the database to free unused memory
