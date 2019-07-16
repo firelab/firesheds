@@ -1004,7 +1004,7 @@ void Usage()
     printf("\nIf out path is specified, it must exist (same path as shapefiles by default)\n");
     printf("\nIf thread number is specified, it must be greater than zero\n");
     printf("Example usage:\n");
-    printf("firesheds --shape C:/my_shapefiles --grid C:/grid --out C:/output --t 4 --verbose");
+    printf("firesheds --shape C:/my_shapefiles --grid C:/grid --out C:/output --t 4 --verbose\n\n");
 
     exit(1); // Exit with error code 1
 }
