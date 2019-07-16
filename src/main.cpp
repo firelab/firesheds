@@ -26,6 +26,10 @@
 
 #include "MyPolygon.h"
 
+#ifndef EQUAL
+#define EQUAL(a,b) (strcmp(a,b)==0)
+#endif
+
 using std::multimap;
 using std::string;
 using std::vector;
@@ -57,11 +61,11 @@ struct FireshedData
 
 SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString);
 
-void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData);
+void ReadShapefilesToMemory(const int numThreads, const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
 int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData, WfipsData& wfipsData);
-void PrintUsageErrorText();
+void Usage();
 
 bool AreClose(double a, double b);
 
@@ -80,58 +84,82 @@ int main(int argc, char *argv[])
     int type = 0;
     string dataPath = "";
     string outPath = "";
+    string gridPath = "";
+    string numThreadsString = "";
     int rc = 0;
     bool verboseParameter = false;
-
     const int SUCCESS = 0;
 
-    if (argc == 2)
+    const int max_argument_index = argc - 1;
+    int argIndex = 1;
+    bool isOutPathSpecified = false;
+    bool isGridPathSpecified = false;
+    bool isNumThreadsSpecified = false;
+
+    // Parse commandline arguments
+    if (argc > 1)
     {
-        string verboseTest = argv[1];
-        std::transform(verboseTest.begin(), verboseTest.end(), verboseTest.begin(), ::tolower);
-        if (verboseTest == "verbose")
+        while (argIndex < argc)
         {
-            PrintUsageErrorText();
-            return EXIT_FAILURE;
-        }
-        dataPath = argv[1];
-        outPath = argv[1];
-    }
-    else if (argc == 3)
-    {
-        dataPath = argv[1];
-        string verboseTest = argv[2];
-        std::transform(verboseTest.begin(), verboseTest.end(), verboseTest.begin(), ::tolower);
-        if (verboseTest == "verbose")
-        {
-            verboseParameter = true;
-            outPath = argv[1];
-        }
-        else
-        {
-            outPath = argv[2];
-        }
-    }
-    else if (argc == 4)
-    {
-        dataPath = argv[1];
-        outPath = argv[2];
-        string verboseTest = argv[3];
-        std::transform(verboseTest.begin(), verboseTest.end(), verboseTest.begin(), ::tolower);
-        if (verboseTest == "verbose")
-        {
-            verboseParameter = true;
-        }
-        else
-        {
-            PrintUsageErrorText();
-            return EXIT_FAILURE;
+            if (EQUAL(argv[argIndex], "--shape"))
+            {
+                if ((argIndex + 1) > max_argument_index) // An error has occurred
+                {
+                    // Report error
+                    printf("ERROR: No shapefile name entered\n");
+                    Usage(); // Exits program
+                }
+                dataPath = argv[++argIndex];
+            }
+            else if (EQUAL(argv[argIndex], "--out"))
+            {
+                if ((argIndex + 1) > max_argument_index) // An error has occurred
+                {
+                    // Report error
+                    printf("ERROR: No output path entered\n");
+                    Usage(); // Exits program
+                }
+                isOutPathSpecified = true;
+                outPath = argv[++argIndex];
+            }
+            else if (EQUAL(argv[argIndex], "--grid"))
+            {
+                if ((argIndex + 1) > max_argument_index) // An error has occurred
+                {
+                    // Report error
+                    printf("ERROR: No grid path entered\n");
+                    Usage(); // Exits program
+                }
+                isGridPathSpecified = true;
+                gridPath = argv[++argIndex];
+            }
+            else if (EQUAL(argv[argIndex], "--t"))
+            {
+                if ((argIndex + 1) > max_argument_index) // An error has occurred
+                {
+                    // Report error
+                    printf("ERROR: No thread number entered\n");
+                    Usage(); // Exits program
+                }
+                isNumThreadsSpecified = true;
+                numThreadsString = argv[++argIndex];
+            }
+            else if (EQUAL(argv[argIndex], "--verbose"))
+            {
+                verboseParameter = true;
+            }
+            else
+            {
+                printf("ERROR: %s is an invalid argument\n", argv[argIndex]);
+                Usage(); // Exits program
+            }
+            argIndex++;
         }
     }
     else
     {
-        PrintUsageErrorText();
-        return EXIT_FAILURE;
+        printf("ERROR: no shapefile path given\n", argv[argIndex]);
+        Usage(); // Exits program
     }
 
     const bool verbose = verboseParameter;
@@ -145,7 +173,24 @@ int main(int argc, char *argv[])
 #endif
     }
 
-    if ((outPath.back() != '/') && (outPath.back() != '\\'))
+    if (!isGridPathSpecified)
+    {
+        gridPath = dataPath;
+    }
+    else if ((gridPath.back() != '/') && (gridPath.back() != '\\'))
+    {
+#ifdef WIN32
+        gridPath.push_back('\\');
+#else
+        gridPath.push_back('/');
+#endif
+    }
+
+    if (!isOutPathSpecified)
+    {
+        outPath = dataPath;
+    }
+    else if ((outPath.back() != '/') && (outPath.back() != '\\'))
     {
 #ifdef WIN32
         outPath.push_back('\\');
@@ -154,10 +199,22 @@ int main(int argc, char *argv[])
 #endif
     }
 
+    int numThreadsArg = -1;
+    if (isNumThreadsSpecified)
+    {
+        numThreadsArg = atoi(numThreadsString.c_str());
+    }
+
+    if (isNumThreadsSpecified && (numThreadsArg < 1))
+    {
+        printf("ERROR: Number of threads must be greater than zero\n", argv[argIndex]);
+        Usage(); // Exits program
+    }
+
     vector<string> shapefileNameList;
     vector<string> shapefilePathList;
 
-    if ((dir = opendir(argv[1])) != nullptr)
+    if ((dir = opendir(dataPath.c_str())) != nullptr)
     {
         /* readt all the files and directories within directory */
         while ((ent = readdir(dir)) != nullptr)
@@ -203,7 +260,7 @@ int main(int argc, char *argv[])
 
     if (rc != SQLITE_OK || db == nullptr)
     {
-        printf("Error: Could not create firesheds.db (is output path valid?)\nexiting program\n");
+        printf("Error: Could not create firesheds.db (does the output directory exist?)\nexiting program\n");
         return EXIT_FAILURE;
     }
 
@@ -247,7 +304,7 @@ int main(int argc, char *argv[])
     const int numCellEdgeDivisions = 16; // Number of times to subdivide WFIPS cells (currently 2000m, makes 125m subcells) 
                                          // to get closer to the resolution used in FSim (apparently ~135m)
 
-    ReadShapefilesToMemory(verbose, startClock, numCellEdgeDivisions, dataPath, shapefileNameList, fireshedData, wfipsData);
+    ReadShapefilesToMemory(numThreadsArg, verbose, startClock, numCellEdgeDivisions, dataPath, shapefileNameList, fireshedData, wfipsData);
 
     ConsolidateFinalData(shapefileListSize, fireshedData);
     CreateFireShedDB(verbose, db, fireshedData, wfipsData);
@@ -261,12 +318,24 @@ int main(int argc, char *argv[])
 /***************************************************************************
 // Shapefile Reading Function
 ***************************************************************************/
-void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData)
+void ReadShapefilesToMemory(const int numThreadsArg, const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData)
 {
-    int numThreads = omp_get_num_procs() - 1;
-    if (numThreads < 1)
+    int numThreads = 1;
+    const int availableThreads = omp_get_num_procs();
+    if (numThreadsArg == -1)
     {
-        numThreads = 1;
+        numThreads = availableThreads;
+    }
+    else
+    {
+        if (numThreadsArg > availableThreads)
+        {
+            numThreads = availableThreads;
+        }
+        else
+        {
+            numThreads = numThreadsArg;
+        }
     }
 
     omp_set_num_threads(numThreads);
@@ -534,9 +603,9 @@ void ReadShapefilesToMemory(const bool verbose, const clock_t startClock, const 
                                 double yEdgeNodeCoord = 0;
 
                                 const int topEdge = 0; // yNodeIndex value for top edge of cell
-                                const int bottomEdge = numEdgeNodes - 1; // yNodeIndex value for bottom edge of WFIPS cell
+                                const int bottomEdge = numEdgeCellDivisions; // yNodeIndex value for bottom edge of WFIPS cell
                                 const int leftEdge = 0; // xNodeIndex value for left edge of cell
-                                const int rightEdge = numEdgeNodes - 1; // xNodeIndex value for right edge of WFIPS cell
+                                const int rightEdge = numEdgeCellDivisions; // xNodeIndex value for right edge of WFIPS cell
 
                                 for (int xNodeIndex = 0; xNodeIndex < numEdgeNodes; xNodeIndex++)
                                 {
@@ -914,10 +983,28 @@ SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString)
     return theBoundingBox;
 }
 
-void PrintUsageErrorText()
+void Usage()
 {
-    printf("Error: need path to shapefiles as first argument");
-    printf("\n    optional second argument specifies output path");
-    printf("\n    if only the input path is provided, output path will be the same");
-    printf("\n    for progress info on console, enter \"verbose\" as last argument\n");
+    printf("\nUsage:\n");
+    printf("firesheds <--shape path>  Required\n");
+    printf("          [--grid path] Optional\n");
+    printf("          [--out path]  Optional\n");
+    printf("          [--t number]  Optional\n");
+    printf("          [--verbose]   Optional\n");
+    printf("--shape <path>          Required: Specifies path to input shapefiles\n");
+    printf("--grid <path>           Optional: Specifies path to WFIPSgrid.tif\n");
+    printf("                        default: grid path is same as shape path\n");
+    printf("--out <path>            Optional: Specifies output path\n");
+    printf("                        default: output path is same as shape path\n");
+    printf("--t <number>            Optional: Specifies number of threads\n");
+    printf("                        default: number of available processors\n");
+    printf("--verbose               Optional: Provides detailed progress information\n");
+    printf("\n\nA valid path to FSIM shapefile data must exist\n");
+    printf("\nA valid path to WFIPSgrid.tif must exist (same path as shapefiles by default)\n");
+    printf("\nIf out path is specified, it must exist (same path as shapefiles by default)\n");
+    printf("\nIf thread number is specified, it must be greater than zero\n");
+    printf("Example usage:\n");
+    printf("firesheds --shape C:/my_shapefiles --grid C:/grid --out C:/output --t 4 --verbose");
+
+    exit(1); // Exit with error code 1
 }
