@@ -17,7 +17,7 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdio>
-#include <ctime>
+#include <chrono>
 #include <gdal_utils.h>
 
 #include "sqlite3.h"
@@ -33,6 +33,14 @@
 using std::multimap;
 using std::string;
 using std::vector;
+using std::chrono::steady_clock;
+
+/***************************************************************************
+// Global Constants
+***************************************************************************/
+static const double epsilon = 0.000000000000000001;
+static const double cellWidthInMeters = 2000.0; // 2 km
+static const double numMicrosecondsPerSecond = 1000000.0;
 
 /***************************************************************************
 // Data Structures
@@ -61,7 +69,7 @@ struct FireshedData
 
 SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString);
 
-void ReadShapefilesToMemory(const int numThreads, const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData);
+void ReadShapefilesToMemory(const int numThreads, const bool verbose, const steady_clock::time_point startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
 int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData, WfipsData& wfipsData);
@@ -69,9 +77,7 @@ void Usage();
 
 bool AreClose(double a, double b);
 
-static const double EPSILON = 0.000000000000000001;
 
-static const double cellWidthInMeters = 2000; // 2 km
 
 int main(int argc, char *argv[])
 {
@@ -300,7 +306,7 @@ int main(int argc, char *argv[])
     FireshedData fireshedData;
     fireshedData.wfipscellsToFireOriginsForSingleFile.resize(shapefileListSize);
 
-    const clock_t startClock = clock();
+    steady_clock::time_point startClock = std::chrono::steady_clock::now();
     const int numCellEdgeDivisions = 16; // Number of times to subdivide WFIPS cells (currently 2000m, makes 125m subcells) 
                                          // to get closer to the resolution used in FSim (apparently ~135m)
 
@@ -309,16 +315,18 @@ int main(int argc, char *argv[])
     ConsolidateFinalData(shapefileListSize, fireshedData);
     CreateFireShedDB(verbose, db, fireshedData, wfipsData);
 
+    long long int elapsedTimeInMicroseconds = std::chrono::microseconds(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startClock)).count();
     printf("Successfully processed all shapefiles in\n    %s\n", dataPath.c_str());
     printf("    and created \"firesheds.db\" in\n    %s\n\n", outPath.c_str());
-    printf("Total time elapsed is %4.2f seconds\n\n", (clock() - startClock) / (double)CLOCKS_PER_SEC);
+    printf("Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
+
     return SUCCESS;
 }
 
 /***************************************************************************
 // Shapefile Reading Function
 ***************************************************************************/
-void ReadShapefilesToMemory(const int numThreadsArg, const bool verbose, const clock_t startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData)
+void ReadShapefilesToMemory(const int numThreadsArg, const bool verbose, const steady_clock::time_point startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData)
 {
     int numThreads = 1;
     const int availableThreads = omp_get_num_procs();
@@ -682,9 +690,10 @@ void ReadShapefilesToMemory(const int numThreadsArg, const bool verbose, const c
             if (verbose)
             {
                 double currentProgress = (numFilesProcessed / (shapefileListSize * 1.0)) * 100.00;
+                long long int elapsedTimeInMicroseconds = std::chrono::microseconds(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startClock)).count();
                 printf("Processed %d files out of %d in\n", numFilesProcessed, shapefileListSize);
                 printf("    %s\n    %4.2f percent of all files to be processed are complete\n", shapefilePath.c_str(), currentProgress);
-                printf("    total time elapsed is %4.2f seconds\n\n", (clock() - startClock) / (double)CLOCKS_PER_SEC);
+                printf(" Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
             }
         }
 
@@ -949,7 +958,7 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData
 
 bool AreClose(double a, double b)
 {
-    return fabs(a - b) < EPSILON;
+    return fabs(a - b) < epsilon;
 }
 
 SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString)
