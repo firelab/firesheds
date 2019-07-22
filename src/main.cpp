@@ -26,10 +26,13 @@
 
 #include "MyPolygon.h"
 
+#include "FileGDBAPI.h"
+
 #ifndef EQUAL
 #define EQUAL(a,b) (strcmp(a,b)==0)
 #endif
 
+using namespace FileGDBAPI;
 using std::multimap;
 using std::string;
 using std::vector;
@@ -60,31 +63,40 @@ struct WfipsData
 
 struct FireshedData
 {
-    vector<unordered_multimap<int, int>> wfipscellsToFireOriginsForSingleFile;
+    vector<unordered_multimap<int, int>> wfipscellsToFireOriginsForSingleGDB;
     vector<vector<int>> originCellsForWfipscell;
     unordered_map<int, int> finalIndexToWfipsCellMap;
     vector<vector<int>> numWfipscellOriginPairs;
     map<int, int> finalOriginCellToTotalPairCountMap;
 };
 
-SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString);
+SBoundingBox GetBoundingBox(vector<MyPoint> theRingString);
 
-void ReadShapefilesToMemory(const int numThreads, const bool verbose, const steady_clock::time_point startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData);
+int FindCellOriginPairsInRAM(const int numThreads, const bool verbose, const steady_clock::time_point startClock, const int numEdgeCellDivisions, string& gdbPath, vector<string>& gdbNameList, FireshedData& fireshedData, WfipsData& wfipsData);
 void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData);
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath);
 int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData, WfipsData& wfipsData);
 void Usage();
 
+fgdbError ReadGeometryFromGDBTable(Table& pyromeTable, WfipsData& wfipsData, vector<MyMultiPolygon>& fireMultipolygons, vector<SBoundingBox>& fireBoundingBoxes, vector<int>& fireNumbers, vector<int>& originCells);
+
 bool AreClose(double a, double b);
+bool IsDirectory(const string& path);
 
-
+enum ESRIExtent
+{
+    minX = 0,
+    minY = 1,
+    maxX = 2,
+    maxY = 3
+};
 
 int main(int argc, char *argv[])
 {
     DIR *dir;
     struct dirent *ent;
 
-    string fileName = "";
+    string fileOrDirectoryName = "";
     string extension = "";
     size_t pos = -1;
     int type = 0;
@@ -107,12 +119,12 @@ int main(int argc, char *argv[])
     {
         while (argIndex < argc)
         {
-            if (EQUAL(argv[argIndex], "--shape"))
+            if (EQUAL(argv[argIndex], "--gdb"))
             {
                 if ((argIndex + 1) > max_argument_index) // An error has occurred
                 {
                     // Report error
-                    printf("ERROR: No shapefile name entered\n");
+                    printf("ERROR: No path to geodatabase entered\n");
                     Usage(); // Exits program
                 }
                 dataPath = argv[++argIndex];
@@ -170,39 +182,36 @@ int main(int argc, char *argv[])
 
     const bool verbose = verboseParameter;
 
+    std::replace(dataPath.begin(), dataPath.end(), '\\', '/'); // replace all '\\' with '/'
     if ((dataPath.back() != '/') && (dataPath.back() != '\\'))
     {
-#ifdef WIN32
-        dataPath.push_back('\\');
-#else
         dataPath.push_back('/');
-#endif
     }
 
+    if (isGridPathSpecified)
+    {
+        std::replace(gridPath.begin(), gridPath.end(), '\\', '/'); // replace all '\\' with '/'
+    }
     if (!isGridPathSpecified)
     {
         gridPath = dataPath;
     }
     else if ((gridPath.back() != '/') && (gridPath.back() != '\\'))
     {
-#ifdef WIN32
-        gridPath.push_back('\\');
-#else
         gridPath.push_back('/');
-#endif
     }
 
+    if (isOutPathSpecified)
+    {
+        std::replace(outPath.begin(), outPath.end(), '\\', '/'); // replace all '\\' with '/'
+    }
     if (!isOutPathSpecified)
     {
         outPath = dataPath;
     }
     else if ((outPath.back() != '/') && (outPath.back() != '\\'))
     {
-#ifdef WIN32
-        outPath.push_back('\\');
-#else
         outPath.push_back('/');
-#endif
     }
 
     int numThreadsArg = -1;
@@ -217,28 +226,29 @@ int main(int argc, char *argv[])
         Usage(); // Exits program
     }
 
-    vector<string> shapefileNameList;
-    vector<string> shapefilePathList;
+    vector<string> gdbNameList;
+    vector<string> gdbFullPathList;
 
     if ((dir = opendir(dataPath.c_str())) != nullptr)
     {
-        /* readt all the files and directories within directory */
+        /* read all the files and directories within directory */
         while ((ent = readdir(dir)) != nullptr)
         {
-            fileName = ent->d_name;
+            fileOrDirectoryName = ent->d_name;
 
-            pos = fileName.find_last_of('.');
+            string directoryName = fileOrDirectoryName;
+            pos = directoryName.find_last_of('.');
             if (pos != string::npos)
             {
-                extension = fileName.substr(pos, fileName.size());
+                extension = directoryName.substr(pos, directoryName.size());
                 std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
-                if (extension == ".shp")
+                if (extension == ".gdb")
                 {
                     //printf("%s\n", fileName.c_str());
-                    shapefileNameList.push_back(fileName);
-                    shapefilePathList.push_back(dataPath + fileName);
+                    gdbNameList.push_back(directoryName);
+                    gdbFullPathList.push_back(dataPath + directoryName);
                 }
-            }
+            }            
         }
         closedir(dir);
     }
@@ -249,13 +259,13 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (shapefilePathList.size() < 1)
+    if (gdbFullPathList.size() < 1)
     {
-        printf("Error: No shapefiles found, exiting program\n");
+        printf("Error: No geodatabase directories found, exiting program\n");
         return EXIT_FAILURE;
     }
 
-    const int shapefileListSize = shapefilePathList.size();
+    const int gdbListSize = gdbFullPathList.size();
 
     sqlite3 *db = nullptr;
 
@@ -301,22 +311,22 @@ int main(int argc, char *argv[])
         printf("WFIPS data populated\n\n");
     }
 
-    printf("Processing all shapefiles in\n    %s\n\nPlease wait...\n\n", dataPath.c_str());
+    printf("Processing all geodatabases in\n    %s\n\nPlease wait...\n\n", dataPath.c_str());
 
     FireshedData fireshedData;
-    fireshedData.wfipscellsToFireOriginsForSingleFile.resize(shapefileListSize);
+    fireshedData.wfipscellsToFireOriginsForSingleGDB.resize(gdbListSize);
 
     steady_clock::time_point startClock = std::chrono::steady_clock::now();
     const int numCellEdgeDivisions = 16; // Number of times to subdivide WFIPS cells (currently 2000m, makes 125m subcells) 
                                          // to get closer to the resolution used in FSim (apparently ~135m)
 
-    ReadShapefilesToMemory(numThreadsArg, verbose, startClock, numCellEdgeDivisions, dataPath, shapefileNameList, fireshedData, wfipsData);
+    FindCellOriginPairsInRAM(numThreadsArg, verbose, startClock, numCellEdgeDivisions, dataPath, gdbNameList, fireshedData, wfipsData);
 
-    ConsolidateFinalData(shapefileListSize, fireshedData);
+    ConsolidateFinalData(gdbListSize, fireshedData);
     CreateFireShedDB(verbose, db, fireshedData, wfipsData);
 
     long long int elapsedTimeInMicroseconds = std::chrono::microseconds(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startClock)).count();
-    printf("Successfully processed all shapefiles in\n    %s\n", dataPath.c_str());
+    printf("Successfully processed all geodatabases in\n    %s\n", dataPath.c_str());
     printf("    and created \"firesheds.db\" in\n    %s\n\n", outPath.c_str());
     printf("Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
 
@@ -326,8 +336,10 @@ int main(int argc, char *argv[])
 /***************************************************************************
 // Shapefile Reading Function
 ***************************************************************************/
-void ReadShapefilesToMemory(const int numThreadsArg, const bool verbose, const steady_clock::time_point startClock, const int numEdgeCellDivisions, string& shapefilePath, vector<string>& shapefileNameList, FireshedData& fireshedData, WfipsData& wfipsData)
+int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const steady_clock::time_point startClock, const int numEdgeCellDivisions, string& gdbPath, vector<string>& gdbNameList, FireshedData& fireshedData, WfipsData& wfipsData)
 {
+    fgdbError hr;
+
     int numThreads = 1;
     const int availableThreads = omp_get_num_procs();
     if (numThreadsArg == -1)
@@ -348,359 +360,272 @@ void ReadShapefilesToMemory(const int numThreadsArg, const bool verbose, const s
 
     omp_set_num_threads(numThreads);
 
-    int numFilesProcessed = 0;
+    volatile int numPyromesProcessed = 0;
 
-    const int shapefileListSize = shapefileNameList.size();
-
-    #pragma omp parallel for schedule(dynamic, 1) shared(numFilesProcessed)
-    for (int shapefileIndex = 0; shapefileIndex < shapefileListSize; shapefileIndex++)
+    const int gdbListSize = gdbNameList.size();
+    int numPyromes = 0;
+    // Get total count of pyromes
+    for (int gdbIndex = 0; gdbIndex < gdbListSize; gdbIndex++)
     {
-        string shapefileFullPath = shapefilePath + shapefileNameList[shapefileIndex];
-        GDALDataset *poShapefileDS = static_cast<GDALDataset*>(GDALOpenEx(shapefileFullPath.c_str(), GDAL_OF_READONLY, NULL, NULL, NULL));
+        // Open the geodatabase.
+        Geodatabase geodatabase;
+        std::replace(gdbPath.begin(), gdbPath.end(), '\\', '/'); // replace all '\\' with '/'
+        wstring wstrDataPath(gdbPath.begin(), gdbPath.end());
+        wstring wstrGdbName(gdbNameList[gdbIndex].begin(), gdbNameList[gdbIndex].end());
+        wstring wstrFullGdbPath = wstrDataPath + wstrGdbName;
 
-        OGRLayer  *poLayer = poShapefileDS->GetLayer(0);
-        OGRFeatureDefn *poFDefn = poLayer->GetLayerDefn();
-
-        OGRwkbGeometryType LayerGeometryType = poLayer->GetGeomType();
-        int NumberOfFeatures = poLayer->GetFeatureCount(true);
-
-        //vector<int> fireNumbers;
-        vector<int> fireOriginCells;
-
-        poLayer->ResetReading();
-
-        int sizeInAcres = 0;
-        int fireNumber;
-
-        enum
+        if ((hr = OpenGeodatabase(wstrFullGdbPath, geodatabase)) != S_OK)
         {
-            fire_number = 0,
-            acres = 7,
-            x_val = 8,
-            y_val = 9
-        };
-
-        double currentProgress = 0;
-
-        int nBufXSize = wfipsData.gridData.GetNumX();
-        int nBufYSize = wfipsData.gridData.GetNumY();
-
-        //Bounding Box of Shapefile 
-        SBoundingBox sBoundingBox;
-
-        //Holds Coordinates of Polygon Shapefile
-        vector<PolygonFeature> PolygonLayer;
-
-        int numFields = 10;
-        double x = 0.0;
-        double y = 0.0;
-
-        int originCell = 0;
-
-        //Polygon Shapefile
-        if (wkbFlatten(LayerGeometryType) == wkbPolygon)
+            printf("An error occurred while opening the geodatabase\n");
+            printf("ESRI Error Code ( %d )\n", hr);
+        }
+        else
         {
-            OGRFeature *poFeature;
-            PolygonFeature Polygon;
-            OGRPoint ptTemp;
-            for (int i = 0; i < NumberOfFeatures; i++)
-            {
-                poFeature = poLayer->GetNextFeature();
-                OGRGeometry *poGeometry;
-                poGeometry = poFeature->GetGeometryRef();
-                poGeometry->assignSpatialReference(&wfipsData.spatialReference);
-
-                for (int fieldIndex = 0; fieldIndex < numFields; fieldIndex++)
-                {
-                    OGRFieldDefn *poFieldDefn = poFDefn->GetFieldDefn(fieldIndex);
-
-                    if (fieldIndex == fire_number)
-                    {
-                        fireNumber = poFeature->GetFieldAsInteger(fieldIndex);
-                    }
-                    if (fieldIndex == acres)
-                    {
-                        sizeInAcres = poFeature->GetFieldAsInteger(fieldIndex);
-                    }
-                    else if (fieldIndex == x_val)
-                    {
-                        x = poFeature->GetFieldAsDouble(fieldIndex);
-                    }
-                    else if (fieldIndex == y_val)
-                    {
-                        y = poFeature->GetFieldAsDouble(fieldIndex);
-                    }
-                }
-
-                if (sizeInAcres >= 150)
-                {
-                    originCell = wfipsData.gridData.WG_GetCellIndex(x, y);
-                    //fireNumbers.push_back(fireNumber);
-                    fireOriginCells.push_back(originCell);
-
-                    if (poGeometry != NULL && wkbFlatten(poGeometry->getGeometryType()) == wkbPolygon)
-                    {
-                        OGRPolygon *poPolygon = (OGRPolygon *)poGeometry;
-                        Polygon.PolygonsOfFeature.resize(1);
-                        int NumberOfInnerRings = poPolygon->getNumInteriorRings();
-                        OGRLinearRing *poExteriorRing = poPolygon->getExteriorRing();
-                        Polygon.PolygonsOfFeature.at(0).Polygon.resize(NumberOfInnerRings + 1);
-                        Polygon.PolygonsOfFeature.at(0).Polygon.at(0).IsClockwised = poExteriorRing->isClockwise();
-                        int NumberOfExteriorRingVertices = poExteriorRing->getNumPoints();
-                        Polygon.PolygonsOfFeature.at(0).Polygon.at(0).RingString.resize(NumberOfExteriorRingVertices);
-                        for (int k = 0; k < NumberOfExteriorRingVertices; k++)
-                        {
-                            poExteriorRing->getPoint(k, &ptTemp);
-                            MyPoint2D pt;
-                            pt.X = ptTemp.getX();
-                            pt.Y = ptTemp.getY();
-                            Polygon.PolygonsOfFeature.at(0).Polygon.at(0).RingString.at(k) = pt;
-                        }
-                        for (int h = 1; h <= NumberOfInnerRings; h++)
-                        {
-                            OGRLinearRing *poInteriorRing = poPolygon->getInteriorRing(h - 1);
-                            Polygon.PolygonsOfFeature.at(0).Polygon.at(h).IsClockwised = poInteriorRing->isClockwise();
-                            int NumberOfInteriorRingVertices = poInteriorRing->getNumPoints();
-                            Polygon.PolygonsOfFeature.at(0).Polygon.at(h).RingString.resize(NumberOfInteriorRingVertices);
-                            for (int k = 0; k < NumberOfInteriorRingVertices; k++)
-                            {
-                                poInteriorRing->getPoint(k, &ptTemp);
-                                MyPoint2D pt;
-                                pt.X = ptTemp.getX();
-                                pt.Y = ptTemp.getY();
-                                Polygon.PolygonsOfFeature.at(0).Polygon.at(h).RingString.at(k) = pt;
-                            }
-                        }
-                        PolygonLayer.push_back(Polygon);
-                    }
-                    else if (poGeometry != NULL && wkbFlatten(poGeometry->getGeometryType()) == wkbMultiPolygon)
-                    {
-                        OGRMultiPolygon *poMultiPolygon = (OGRMultiPolygon *)poGeometry;
-                        int NumberOfGeometries = poMultiPolygon->getNumGeometries();
-                        Polygon.PolygonsOfFeature.resize(NumberOfGeometries);
-                        for (int j = 0; j < NumberOfGeometries; j++)
-                        {
-                            OGRGeometry *poPolygonGeometry = poMultiPolygon->getGeometryRef(j);
-                            OGRPolygon *poPolygon = (OGRPolygon *)poPolygonGeometry;
-                            int NumberOfInnerRings = poPolygon->getNumInteriorRings();
-                            OGRLinearRing *poExteriorRing = poPolygon->getExteriorRing();
-                            Polygon.PolygonsOfFeature.at(j).Polygon.resize(NumberOfInnerRings + 1);
-                            Polygon.PolygonsOfFeature.at(j).Polygon.at(0).IsClockwised = poExteriorRing->isClockwise();
-                            int NumberOfExteriorRingVertices = poExteriorRing->getNumPoints();
-                            Polygon.PolygonsOfFeature.at(j).Polygon.at(0).RingString.resize(NumberOfExteriorRingVertices);
-                            for (int k = 0; k < NumberOfExteriorRingVertices; k++)
-                            {
-                                poExteriorRing->getPoint(k, &ptTemp);
-                                MyPoint2D pt;
-                                pt.X = ptTemp.getX();
-                                pt.Y = ptTemp.getY();
-                                Polygon.PolygonsOfFeature.at(j).Polygon.at(0).RingString.at(k) = pt;
-                            }
-                            for (int h = 1; h <= NumberOfInnerRings; h++)
-                            {
-                                OGRLinearRing *poInteriorRing = poPolygon->getInteriorRing(h - 1);
-                                Polygon.PolygonsOfFeature.at(j).Polygon.at(h).IsClockwised = poInteriorRing->isClockwise();
-                                int NumberOfInteriorRingVertices = poInteriorRing->getNumPoints();
-                                Polygon.PolygonsOfFeature.at(j).Polygon.at(h).RingString.resize(NumberOfInteriorRingVertices);
-                                for (int k = 0; k < NumberOfInteriorRingVertices; k++)
-                                {
-                                    poInteriorRing->getPoint(k, &ptTemp);
-                                    MyPoint2D pt;
-                                    pt.X = ptTemp.getX();
-                                    pt.Y = ptTemp.getY();
-                                    Polygon.PolygonsOfFeature.at(j).Polygon.at(h).RingString.at(k) = pt;
-                                }
-                            }
-                        }
-                        PolygonLayer.push_back(Polygon);
-                    }
-                }
-                OGRFeature::DestroyFeature(poFeature);
-            }
+            // Get all layer names in current gdb
+            vector<wstring> pyromeNames;
+            hr = geodatabase.GetChildDatasets(L"\\", L"", pyromeNames); // root path is "\\", empty second parameter returns all
+            numPyromes += pyromeNames.size();
         }
 
-        //fireNumbers.shrink_to_fit();
-        fireOriginCells.shrink_to_fit();
-
-        GDALClose(poShapefileDS);
-
-        int numFires = PolygonLayer.size();
-
-        unordered_multimap<int, int> tempTotalWfipscellsToFireOrigins;
-
-        for (int fireIndex = 0; fireIndex < PolygonLayer.size(); fireIndex++)
+        // Close the geodatabase
+        if ((hr = CloseGeodatabase(geodatabase)) != S_OK)
         {
-            //fireNumber = fireNumbers[fireIndex];
-            int origin = fireOriginCells[fireIndex];
+            printf("An error occurred while closing the geodatabase\n");
+        }
+    }
 
-            unordered_map<int, int> tempSingleFireWfipscellsToFireOrigins; // used to check if cell is already burned by fire
+    for (int gdbIndex = 0; gdbIndex < gdbListSize; gdbIndex++)
+    {
+        // Open the geodatabase.
+        Geodatabase geodatabase;
+        std::replace(gdbPath.begin(), gdbPath.end(), '\\', '/'); // replace all '\\' with '/'
+        wstring wstrDataPath(gdbPath.begin(), gdbPath.end());
+        wstring wstrGdbName(gdbNameList[gdbIndex].begin(), gdbNameList[gdbIndex].end());
+        wstring wstrFullGdbPath = wstrDataPath + wstrGdbName;
 
-             // Always assume cell containing the origin is burned by the fire
-            tempTotalWfipscellsToFireOrigins.insert(std::make_pair(origin, origin));
-            tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(origin, origin));
+        if ((hr = OpenGeodatabase(wstrFullGdbPath, geodatabase)) != S_OK)
+        {
+            printf("An error occurred while opening the geodatabase\n");
+            printf("ESRI Error Code ( %d )\n", hr);
+        }
+        else
+        {
+            // Get all layer names in current gdb
+            vector<wstring> pyromeNames;
+            hr = geodatabase.GetChildDatasets(L"\\", L"", pyromeNames); // root path is "\\", empty second parameter returns all
 
-            int numMultiPolygons = PolygonLayer[fireIndex].PolygonsOfFeature.size();
-            for (int multiPolygonIndex = 0; multiPolygonIndex < numMultiPolygons; multiPolygonIndex++)
+            for (int pyromeIndex = 0; pyromeIndex < pyromeNames.size(); pyromeIndex++)
             {
-                int numPolygons = PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon.size();
-                for (int polygonIndex = 0; polygonIndex < numPolygons; polygonIndex++)
-                {
-                    int ringStringSize = PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString.size();
-                    MyPoint2D firstPt;
-                    firstPt.X = PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString[0].X;
-                    firstPt.Y = PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString[0].Y;
-                    MyPoint2D lastPt;
-                    lastPt.X = PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString[ringStringSize - 1].X;
-                    lastPt.Y = PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString[ringStringSize - 1].Y;
+                vector<MyMultiPolygon> fireMultiPolygons;
+                vector<SBoundingBox> fireBoundingBoxes;
+                vector<int> fireOriginCells;
+                vector<int> fireNumbers;
+                Table pyromeTable;
+                // Begin load only mode. This shuts off the update of all indexes. Set a write lock.
+                 // Setting the write lock will improve performance when bulk loading.
+                pyromeTable.LoadOnlyMode(true);
+                pyromeTable.SetWriteLock();
 
-                    if (!((AreClose(firstPt.X, lastPt.X)) && (AreClose(firstPt.Y, lastPt.Y))))
+                string currentPyromeName(pyromeNames[pyromeIndex].begin(), pyromeNames[pyromeIndex].end());
+                std::remove(currentPyromeName.begin(), currentPyromeName.end(), '\\');
+                currentPyromeName.pop_back(); // weird issue with repeated last character from wstring
+
+                // Open the Pyrome table.
+                if ((hr = geodatabase.OpenTable(pyromeNames[pyromeIndex], pyromeTable)) != S_OK)
+                {
+                    printf("An error occurred while opening geodatabase table %s\n", currentPyromeName.c_str());
+                }
+                else
+                {
+                    if(verbose)
                     {
-                        PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString.push_back(firstPt);
+                        printf("Reading geometry data from table %s\n", currentPyromeName.c_str());
+                    }
+                    ReadGeometryFromGDBTable(pyromeTable, wfipsData, fireMultiPolygons, fireBoundingBoxes, fireNumbers, fireOriginCells);
+                    // Close the table
+                    if ((hr = geodatabase.CloseTable(pyromeTable)) != S_OK)
+                    {
+                        printf("An error occurred while closing the table\n");
                     }
 
-                    // Get the bounding box for the current fire
-                    SBoundingBox fireBoundingBox = GetBoundingBox(PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
-                    int upperLeftCell = wfipsData.gridData.WG_GetCellIndex(fireBoundingBox.minX, fireBoundingBox.maxY);
-                    int lowerRightCell = wfipsData.gridData.WG_GetCellIndex(fireBoundingBox.maxX, fireBoundingBox.minY);
+                    unordered_multimap<int, int> tempTotalWfipscellsToFireOrigins;
 
-                    int minRow = 0;
-                    int maxRow = 0;
-                    int minCol = 0;
-                    int maxCol = 0;
-
-                    // Find rows and columns that correspond to the upper-left and lower-right corners of fire bounding box
-                    wfipsData.gridData.GetRowColFromWfipsCell(upperLeftCell, &minRow, &minCol);
-                    wfipsData.gridData.GetRowColFromWfipsCell(lowerRightCell, &maxRow, &maxCol);
-
-                    int cellIndex = 0;
-                    for (int row = minRow; row <= maxRow; row++)
+                    #pragma omp parallel for schedule(dynamic, 1) shared(numPyromesProcessed)
+                    for (int fireIndex = 0; fireIndex < fireMultiPolygons.size(); fireIndex++)
                     {
-                        for (int col = minCol; col <= maxCol; col++)
+                        int fireNumber = fireNumbers[fireIndex];
+                        int origin = fireOriginCells[fireIndex];
+
+                        unordered_map<int, int> tempSingleFireWfipscellsToFireOrigins; // used to check if cell is already burned by fire
+
+                            // Get the bounding box for the current fire
+                        SBoundingBox fireBoundingBox = fireBoundingBoxes[fireIndex];
+
+                        // Always assume cell containing the origin is burned by the fire
+                        tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(origin, origin));
+                        for (int subPolygonIndex = 0; subPolygonIndex < fireMultiPolygons[fireIndex].polygonPart.size(); subPolygonIndex++)
                         {
-                            cellIndex = wfipsData.gridData.GetWfipsCellIndex(row, col);
-                            origin = fireOriginCells[fireIndex];
+                            int upperLeftCell = wfipsData.gridData.WG_GetCellIndex(fireBoundingBox.minX, fireBoundingBox.maxY);
+                            int lowerRightCell = wfipsData.gridData.WG_GetCellIndex(fireBoundingBox.maxX, fireBoundingBox.minY);
 
-                            // Below each cell within the current fire's bounding box not already marked as burned by that fire
-                            // is subdivided into numEdgeCellDivisions subcells. The nodes along the outer edges of the subcells
-                            // are then used as test points in Mark's point in poly function IsOverlapping(). We test only points
-                            // along the edge as we only need to check where the fire crosses into a WFIPS cell from another cell
-                            // as origin cells are always assumed to be burned by a fire. If any node on the edge of the subcells
-                            // for the current WFIPS cell is found to be within the fire, we mark that cell as burned and move on
-                            // to the next cell within the fire's bounding box.
+                            int minRow = 0;
+                            int maxRow = 0;
+                            int minCol = 0;
+                            int maxCol = 0;
 
-                            // Need to check if cell has already been burned by one of the current fire's subpolygons so as not to
-                            // count cells as being burned by the same fire more than once  
-                            bool isCellAlreadyBurned = !(tempSingleFireWfipscellsToFireOrigins.find(cellIndex) == tempSingleFireWfipscellsToFireOrigins.end());
-                            if (!isCellAlreadyBurned)
+                            // Find rows and columns that correspond to the upper-left and lower-right corners of fire bounding box
+                            wfipsData.gridData.GetRowColFromWfipsCell(upperLeftCell, &minRow, &minCol);
+                            wfipsData.gridData.GetRowColFromWfipsCell(lowerRightCell, &maxRow, &maxCol);
+
+                            int cellIndex = 0;
+                            for (int row = minRow; row <= maxRow; row++)
                             {
-                                SBoundingBox cellBoundingBox = wfipsData.cellBoundingBoxes[cellIndex];
-
-                                const double xMin = cellBoundingBox.minX;
-                                const double yMin = cellBoundingBox.minY;
-                                const double xMax = cellBoundingBox.maxX;
-                                const double yMax = cellBoundingBox.maxY;
-
-                                MyPoint2D testPoint;
-                                testPoint.X = xMin;
-                                testPoint.Y = yMin;
-                                const int numEdgeNodes = numEdgeCellDivisions + 1;
-                                const double nodeStepSizeInMeters = cellWidthInMeters * (1.0 / numEdgeCellDivisions);
-
-                                bool isCellInFirePolygon = false;
-                                double xEdgeNodeCoord = 0;
-                                double yEdgeNodeCoord = 0;
-
-                                const int topEdge = 0; // yNodeIndex value for top edge of cell
-                                const int bottomEdge = numEdgeCellDivisions; // yNodeIndex value for bottom edge of WFIPS cell
-                                const int leftEdge = 0; // xNodeIndex value for left edge of cell
-                                const int rightEdge = numEdgeCellDivisions; // xNodeIndex value for right edge of WFIPS cell
-
-                                for (int xNodeIndex = 0; xNodeIndex < numEdgeNodes; xNodeIndex++)
+                                for (int col = minCol; col <= maxCol; col++)
                                 {
-                                    if (!isCellInFirePolygon)
-                                    {
-                                        xEdgeNodeCoord = xMin + (nodeStepSizeInMeters * xNodeIndex);
-                                        testPoint.X = xEdgeNodeCoord;
-                                        for (int yNodeIndex = 0; yNodeIndex < numEdgeNodes; yNodeIndex++)
-                                        {
-                                            yEdgeNodeCoord = yMin + (nodeStepSizeInMeters * yNodeIndex);
-                                            testPoint.Y = yEdgeNodeCoord;
+                                    cellIndex = wfipsData.gridData.GetWfipsCellIndex(row, col);
 
-                                            if ((yNodeIndex == topEdge) || (yNodeIndex == bottomEdge))
+                                    // Below each cell within the current fire's bounding box not already marked as burned by that fire
+                                    // is subdivided into numEdgeCellDivisions subcells. The nodes along the outer edges of the subcells
+                                    // are then used as test points in Mark's point in poly function IsOverlapping(). We test only points
+                                    // along the edge as we only need to check where the fire crosses into a WFIPS cell from another cell
+                                    // as origin cells are always assumed to be burned by a fire. If any node on the edge of the subcells
+                                    // for the current WFIPS cell is found to be within the fire, we mark that cell as burned and move on
+                                    // to the next cell within the fire's bounding box.
+
+                                    // Need to check if cell has already been burned by one of the current fire's subpolygons so as not to
+                                    // count cells as being burned by the same fire more than once  
+                                    bool isCellAlreadyBurned = !(tempSingleFireWfipscellsToFireOrigins.find(cellIndex) == tempSingleFireWfipscellsToFireOrigins.end());
+                                    if (!isCellAlreadyBurned)
+                                    {
+                                        SBoundingBox cellBoundingBox = wfipsData.cellBoundingBoxes[cellIndex];
+
+                                        const double xMin = cellBoundingBox.minX;
+                                        const double yMin = cellBoundingBox.minY;
+                                        const double xMax = cellBoundingBox.maxX;
+                                        const double yMax = cellBoundingBox.maxY;
+
+                                        MyPoint testPoint;
+                                        testPoint.x = xMin;
+                                        testPoint.y = yMin;
+                                        const int numEdgeNodes = numEdgeCellDivisions + 1;
+                                        const double nodeStepSizeInMeters = cellWidthInMeters * (1.0 / numEdgeCellDivisions);
+
+                                        bool isCellInFirePolygon = false;
+                                        double xEdgeNodeCoord = 0;
+                                        double yEdgeNodeCoord = 0;
+
+                                        const int bottomEdge = 0; // yNodeIndex value for top edge of cell
+                                        const int topEdge = numEdgeCellDivisions; // yNodeIndex value for bottom edge of WFIPS cell
+                                        const int leftEdge = 0; // xNodeIndex value for left edge of cell
+                                        const int rightEdge = numEdgeCellDivisions; // xNodeIndex value for right edge of WFIPS cell
+
+                                        for (int xNodeIndex = 0; xNodeIndex < numEdgeNodes; xNodeIndex++)
+                                        {
+                                            if (!isCellInFirePolygon)
                                             {
-                                                // Check all subcell nodes along the cell top or bottom egdes of WFIPS cell  
-                                                isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
-                                                    PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
-                                                if (isCellInFirePolygon)
+                                                xEdgeNodeCoord = xMin + (nodeStepSizeInMeters * xNodeIndex);
+                                                testPoint.x = xEdgeNodeCoord;
+                                                for (int yNodeIndex = 0; yNodeIndex < numEdgeNodes; yNodeIndex++)
                                                 {
-                                                    break; // Leave yNode loop
-                                                }
-                                            }
-                                            else 
-                                            {
-                                                // If not along top or bottom edge of WFIPS cell, check only subcell nodes on left and right edges
-                                                if ((xNodeIndex == leftEdge) || (xNodeIndex == rightEdge))
-                                                {
-                                                    isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
-                                                        PolygonLayer[fireIndex].PolygonsOfFeature[multiPolygonIndex].Polygon[polygonIndex].RingString);
-                                                    if (isCellInFirePolygon)
+                                                    yEdgeNodeCoord = yMin + (nodeStepSizeInMeters * yNodeIndex);
+                                                    testPoint.y = yEdgeNodeCoord;
+
+                                                    if ((yNodeIndex == topEdge) || (yNodeIndex == bottomEdge))
                                                     {
-                                                        break; // Leave yNode loop
+                                                        // Check all subcell nodes along the cell top or bottom egdes of WFIPS cell  
+                                                        isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
+                                                            fireMultiPolygons[fireIndex].polygonPart[subPolygonIndex].pointString);
+                                                        if (isCellInFirePolygon)
+                                                        {
+                                                            break; // Leave yNode loop
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        // If not along top or bottom edge of WFIPS cell, check only subcell nodes on left and right edges
+                                                        if ((xNodeIndex == leftEdge) || (xNodeIndex == rightEdge))
+                                                        {
+                                                            isCellInFirePolygon = MyPolygonUtility::IsOverlapping(testPoint,
+                                                                fireMultiPolygons[fireIndex].polygonPart[subPolygonIndex].pointString);
+                                                            if (isCellInFirePolygon)
+                                                            {
+                                                                break; // Leave yNode loop
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
+                                            else
+                                            {
+                                                break;  // Leave xNode loop
+                                            }
+                                        }
+                                        if (isCellInFirePolygon)
+                                        {
+                                            // Mark current cell as being burned by the fire
+                                            tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
                                         }
                                     }
-                                    else
-                                    {
-                                        break;  // Leave xNode loop
-                                    }
-                                }
-                                if (isCellInFirePolygon)
-                                {
-                                    // Mark current cell as being burned by the fire
-                                    tempTotalWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
-                                    tempSingleFireWfipscellsToFireOrigins.insert(std::make_pair(cellIndex, origin));
                                 }
                             }
                         }
+                  
+                        // Update shared wfipscells to origin map for current geodatabase
+                        #pragma omp critical
+                        {
+                            if (verbose & (fireIndex % 1000 == 0))
+                            {
+                                double currentPyromeProgress = (fireIndex / (fireMultiPolygons.size() * 1.0)) * 100.00;
+                                double totalProgress = (numPyromesProcessed / (numPyromes * 1.0)) * 100.00;
+                                long long int elapsedTimeInMicroseconds = std::chrono::microseconds(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startClock)).count();
+
+                                printf("%4.2f percent of pyrome %s\n    is complete\n", currentPyromeProgress, currentPyromeName.c_str());
+                                printf("Processed %d pyromes out of %d\n", numPyromesProcessed, numPyromes);
+                                printf("%4.2f percent of all pyromes is complete\n", totalProgress);
+                                printf("Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
+                            }
+
+                            int wfipscell;
+                            int origin;
+                            for (auto iterator = tempSingleFireWfipscellsToFireOrigins.begin(); iterator != tempSingleFireWfipscellsToFireOrigins.end(); iterator++)
+                            {
+                                wfipscell = iterator->first;
+                                origin = iterator->second;
+                                fireshedData.wfipscellsToFireOriginsForSingleGDB[gdbIndex].insert(std::make_pair(wfipscell, origin));
+                            }
+                        }
+                        // Clear list of cells burned by current fire for next loop iteration
+                        tempSingleFireWfipscellsToFireOrigins.clear();
                     }
+
+                    #pragma omp atomic
+                    numPyromesProcessed++;
+
+                    if (verbose)
+                    {
+                        double totalProgress = (numPyromesProcessed / (numPyromes * 1.0)) * 100.00;
+                        long long int elapsedTimeInMicroseconds = std::chrono::microseconds(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startClock)).count();
+                        printf("Processed %d pyromes out of %d in\n", numPyromesProcessed, numPyromes);
+                        printf("    %s\n    %4.2f percent of all pyromes to be processed are complete\n", gdbPath.c_str(), totalProgress);
+                        printf(" Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
+                    }
+
+
+                    fireNumbers.clear();
+                    fireOriginCells.clear();
+                    tempTotalWfipscellsToFireOrigins.clear();
                 }
             }
-            // Clear list of cells burned by current fire for next loop iteration
-            tempSingleFireWfipscellsToFireOrigins.clear();
-        }
 
-        int wfipscell = -1;
-        int origin = -1;
-
-        #pragma omp atomic
-        numFilesProcessed++;
-
-        #pragma omp critical
-        {
-            // Populate data in shared vector
-            for (auto iterator = tempTotalWfipscellsToFireOrigins.begin(); iterator != tempTotalWfipscellsToFireOrigins.end(); iterator++)
+            // Close the geodatabase
+            if ((hr = CloseGeodatabase(geodatabase)) != S_OK)
             {
-                wfipscell = iterator->first;
-                origin = iterator->second;
-                fireshedData.wfipscellsToFireOriginsForSingleFile[shapefileIndex].insert(std::make_pair(wfipscell, origin));
-            }
-
-            if (verbose)
-            {
-                double currentProgress = (numFilesProcessed / (shapefileListSize * 1.0)) * 100.00;
-                long long int elapsedTimeInMicroseconds = std::chrono::microseconds(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startClock)).count();
-                printf("Processed %d files out of %d in\n", numFilesProcessed, shapefileListSize);
-                printf("    %s\n    %4.2f percent of all files to be processed are complete\n", shapefilePath.c_str(), currentProgress);
-                printf(" Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
+                printf("An error occurred while closing the geodatabase\n");
             }
         }
-
-        //fireNumbers.clear();
-        fireOriginCells.clear();
-        tempTotalWfipscellsToFireOrigins.clear();
     }
+ 
+    return 0;
 }
 
 int FillWfipsData(WfipsData& wfipsData, std::string dataPath)
@@ -732,7 +657,7 @@ int FillWfipsData(WfipsData& wfipsData, std::string dataPath)
     return rc;
 }
 
-void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
+void ConsolidateFinalData(const int num_gdbs, FireshedData& fireshedData)
 {
     multiset<pair<int, int>> totalWfipscellsToFireOriginPairs;
     vector<pair<int, int>> totalPairsForSingleOrigin;
@@ -744,16 +669,16 @@ void ConsolidateFinalData(const int num_shape_files, FireshedData& fireshedData)
     int numPairs = -1;
     int numTotalPairs = -1;
 
-    for (int shapeFileIndex = 0; shapeFileIndex < num_shape_files; shapeFileIndex++)
+    for (int gdbIndex = 0; gdbIndex < num_gdbs; gdbIndex++)
     {
-        for (auto iterator = fireshedData.wfipscellsToFireOriginsForSingleFile[shapeFileIndex].begin(); iterator != fireshedData.wfipscellsToFireOriginsForSingleFile[shapeFileIndex].end(); iterator++)
+        for (auto iterator = fireshedData.wfipscellsToFireOriginsForSingleGDB[gdbIndex].begin(); iterator != fireshedData.wfipscellsToFireOriginsForSingleGDB[gdbIndex].end(); iterator++)
         {
             wfipscell = iterator->first;
             origin = iterator->second;
             totalWfipscellsToFireOriginPairs.insert(std::make_pair(wfipscell, origin));
         }
 
-        fireshedData.wfipscellsToFireOriginsForSingleFile[shapeFileIndex].clear();
+        fireshedData.wfipscellsToFireOriginsForSingleGDB[gdbIndex].clear();
     }
 
     // Get the data for num_pairs field
@@ -934,9 +859,12 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData
     rc = sqlite3_exec(db, "END TRANSACTION", NULL, NULL, &sqlErrMsg);
     rc = sqlite3_exec(db, "PRAGMA SYNCHRONOUS=ON", NULL, NULL, NULL);
 
-    //create indices
+    //create indices, index naming convention: idx_table_name_field_name
     printf("Creating indices on tables...\n");
     rc = sqlite3_exec(db, "CREATE INDEX idx_firesheds_wfipscell ON firesheds(wfipscell ASC)",
+        NULL, NULL, &sqlErrMsg);
+
+    rc = sqlite3_exec(db, "CREATE INDEX idx_firesheds_origin ON firesheds(origin ASC)",
         NULL, NULL, &sqlErrMsg);
 
     rc = sqlite3_exec(db, "CREATE UNIQUE INDEX idx_totals_for_origins_origin ON totals_for_origins(origin ASC)",
@@ -961,31 +889,31 @@ bool AreClose(double a, double b)
     return fabs(a - b) < epsilon;
 }
 
-SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString)
+SBoundingBox GetBoundingBox(vector<MyPoint> theRingString)
 {
     SBoundingBox theBoundingBox;
-    theBoundingBox.minX = theRingString[0].X;
-    theBoundingBox.maxX = theRingString[0].X;
-    theBoundingBox.minY = theRingString[0].Y;
-    theBoundingBox.maxY = theRingString[0].Y;
+    theBoundingBox.minX = theRingString[0].x;
+    theBoundingBox.maxX = theRingString[0].x;
+    theBoundingBox.minY = theRingString[0].y;
+    theBoundingBox.maxY = theRingString[0].y;
 
     for (int i = 0; i < theRingString.size(); i++)
     {
-        if (theRingString[i].X < theBoundingBox.minX)
+        if (theRingString[i].x < theBoundingBox.minX)
         {
-            theBoundingBox.minX = theRingString[i].X;
+            theBoundingBox.minX = theRingString[i].x;
         }
-        if (theRingString[i].X > theBoundingBox.maxX)
+        if (theRingString[i].x > theBoundingBox.maxX)
         {
-            theBoundingBox.maxX = theRingString[i].X;
+            theBoundingBox.maxX = theRingString[i].x;
         }
-        if (theRingString[i].Y < theBoundingBox.minY)
+        if (theRingString[i].y < theBoundingBox.minY)
         {
-            theBoundingBox.minY = theRingString[i].Y;
+            theBoundingBox.minY = theRingString[i].y;
         }
-        if (theRingString[i].Y > theBoundingBox.maxY)
+        if (theRingString[i].y > theBoundingBox.maxY)
         {
-            theBoundingBox.maxY = theRingString[i].Y;
+            theBoundingBox.maxY = theRingString[i].y;
         }
     }
 
@@ -995,25 +923,129 @@ SBoundingBox GetBoundingBox(vector<MyPoint2D> theRingString)
 void Usage()
 {
     printf("\nUsage:\n");
-    printf("firesheds <--shape path>  Required\n");
+    printf("firesheds <--gdb path>  Required\n");
     printf("          [--grid path] Optional\n");
     printf("          [--out path]  Optional\n");
     printf("          [--t number]  Optional\n");
     printf("          [--verbose]   Optional\n");
-    printf("--shape <path>          Required: Specifies path to input shapefiles\n");
+    printf("--gdb <path>          Required: Specifies path to input geodatabase\n");
     printf("--grid <path>           Optional: Specifies path to WFIPSgrid.tif\n");
-    printf("                        default: grid path is same as shape path\n");
+    printf("                        default: grid path is same as geodatabase path\n");
     printf("--out <path>            Optional: Specifies output path\n");
-    printf("                        default: output path is same as shape path\n");
+    printf("                        default: output path is same as geodatabase path\n");
     printf("--t <number>            Optional: Specifies number of threads\n");
     printf("                        default: number of available processors\n");
     printf("--verbose               Optional: Provides detailed progress information\n");
     printf("\n\nA valid path to FSIM shapefile data must exist\n");
-    printf("\nA valid path to WFIPSgrid.tif must exist (same path as shapefiles by default)\n");
-    printf("\nIf out path is specified, it must exist (same path as shapefiles by default)\n");
+    printf("\nA valid path to WFIPSgrid.tif must exist (same path as geodatabase by default)\n");
+    printf("\nIf out path is specified, it must exist (same path as geodatabase by default)\n");
     printf("\nIf thread number is specified, it must be greater than zero\n");
     printf("Example usage:\n");
-    printf("firesheds --shape C:/my_shapefiles --grid C:/grid --out C:/output --t 4 --verbose\n\n");
+    printf("firesheds --gdb C:/my_geodatabases --grid C:/grid --out C:/output --t 4 --verbose\n\n");
 
     exit(1); // Exit with error code 1
+}
+
+fgdbError ReadGeometryFromGDBTable(Table& pyromeTable, WfipsData& wfipsData, vector<MyMultiPolygon>& fireMultipolygons, vector<SBoundingBox>& fireBoundingBoxes, vector<int>& fireNumbers, vector<int>& originCells)
+{
+    fgdbError hr;
+
+    EnumRows enumRows;
+    int rowCount;
+    pyromeTable.GetRowCount(rowCount);
+
+    enum field_number // retrieved from reading field information using GetFields()
+    {
+        fire_number = 2,
+        origin_x = 9,
+        origin_y = 10
+    };
+
+    if ((hr = pyromeTable.Search(L"*", L"GIS_SizeAc >= 150", true, enumRows)) != S_OK)
+    {
+        wcout << "An error occurred while performing the attribute query." << endl;
+        return E_FAIL;
+    }
+
+    Row row;
+    
+    // Read in all results from query
+    while ((hr = enumRows.Next(row)) == S_OK)
+    {
+        double fireNumber; // fire number is stored as double in the gdb
+        double x;
+        double y;
+
+        std::vector<FieldDef> fieldDefs;
+
+        row.GetFields(fieldDefs);
+
+        row.GetDouble(field_number::fire_number, fireNumber);
+        row.GetDouble(field_number::origin_x, x);
+        row.GetDouble(field_number::origin_y, y);
+
+        fireNumbers.push_back(static_cast<int>(fireNumber));
+        originCells.push_back(wfipsData.gridData.WG_GetCellIndex(x, y));
+
+        MultiPartShapeBuffer fireGeometry;
+        row.GetGeometry(fireGeometry);
+
+        int numPoints;
+        fireGeometry.GetNumPoints(numPoints);
+
+        int numParts;
+        fireGeometry.GetNumParts(numParts);
+
+        double xMin, xMax, yMin, yMax;
+
+        double* xyExtent;
+        fireGeometry.GetExtent(xyExtent);
+        
+        SBoundingBox boundingBox;
+        boundingBox.minX = xyExtent[ESRIExtent::minX];
+        boundingBox.minY = xyExtent[ESRIExtent::minY];
+        boundingBox.maxX = xyExtent[ESRIExtent::maxX];
+        boundingBox.maxY = xyExtent[ESRIExtent::maxY];
+
+        fireBoundingBoxes.push_back(boundingBox);
+
+        int* partsArray;
+        fireGeometry.GetParts(partsArray);
+
+        Point* points;
+        fireGeometry.GetPoints(points);
+
+        MyMultiPolygon multiPolygon;
+
+        int polygonPartIndex = -1;
+        int partCount = 0;
+        for (int i = 0; i < numPoints; i++)
+        {
+            if ((partCount < numParts) && (i == partsArray[partCount]))
+            {
+                MyPolygonPart polygonPart;
+                multiPolygon.polygonPart.push_back(polygonPart);
+                partCount++;
+                polygonPartIndex++;
+            }
+            MyPoint myPoint;
+            myPoint.x = points[i].x;
+            myPoint.y = points[i].y;
+            multiPolygon.polygonPart[polygonPartIndex].pointString.push_back(myPoint);
+        }
+        fireMultipolygons.push_back(multiPolygon);
+    }
+    enumRows.Close();
+
+    return S_OK;
+}
+
+bool IsDirectory(const string& path)
+{
+    struct stat statbuf;
+    if (stat(path.c_str(), &statbuf) != 0)
+    {
+        return 0;
+    }
+    return S_ISDIR(statbuf.st_mode);
 }

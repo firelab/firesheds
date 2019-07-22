@@ -4,13 +4,13 @@
 
 static const double PI = 3.14159265358979323846;
 
-double MyPolygonUtility::Direction(const MyPoint2D& gridPoint, const MyPoint2D& FirePerimeterPoint)
+double MyPolygonUtility::Direction(const MyPoint& gridPoint, const MyPoint& FirePerimeterPoint)
 {
     // calculates sweep direction for angle determination
     double zangle = 999.9, xDiff, ydiff;
 
-    xDiff = FirePerimeterPoint.X - gridPoint.X;
-    ydiff = FirePerimeterPoint.Y - gridPoint.Y;
+    xDiff = FirePerimeterPoint.x - gridPoint.x;
+    ydiff = FirePerimeterPoint.y - gridPoint.y;
 
     if (fabs(xDiff) < 1e-9)
     {
@@ -47,7 +47,7 @@ double MyPolygonUtility::Direction(const MyPoint2D& gridPoint, const MyPoint2D& 
     return zangle;
 }
 
-bool MyPolygonUtility::IsOverlapping(const MyPoint2D& gridPoint, vector<MyPoint2D>& CurrentFirePerimeter)
+bool MyPolygonUtility::IsOverlapping(const MyPoint& gridPoint, vector<MyPoint>& CurrentFirePerimeter)
 {
     // determines if point is inside or outside a fire polygon (CurrentFirePerimeter)
     long NumVertex = CurrentFirePerimeter.size();
@@ -58,11 +58,11 @@ bool MyPolygonUtility::IsOverlapping(const MyPoint2D& gridPoint, vector<MyPoint2
     double angleA = 0.0, angleB;
     double cumulativeAngle = 0.0, angleDifference;
 
-    MyPoint2D firePerimeterPoint;
+    MyPoint firePerimeterPoint;
     while (count < NumVertex) // make sure that startx, starty != x[0]y[0]
     {
-        firePerimeterPoint.X = CurrentFirePerimeter[count].X;
-        firePerimeterPoint.Y = CurrentFirePerimeter[count].Y;
+        firePerimeterPoint.x = CurrentFirePerimeter[count].x;
+        firePerimeterPoint.y = CurrentFirePerimeter[count].y;
         angleA = Direction(gridPoint, firePerimeterPoint);
         count++;
         if (angleA != 999.9)
@@ -82,8 +82,8 @@ bool MyPolygonUtility::IsOverlapping(const MyPoint2D& gridPoint, vector<MyPoint2
             count2 = count1;
         }
 
-        firePerimeterPoint.X = CurrentFirePerimeter[count2].X;
-        firePerimeterPoint.Y = CurrentFirePerimeter[count2].Y;
+        firePerimeterPoint.x = CurrentFirePerimeter[count2].x;
+        firePerimeterPoint.y = CurrentFirePerimeter[count2].y;
 
         angleB = Direction(gridPoint, firePerimeterPoint);
         if (angleB != 999.9)
@@ -101,7 +101,7 @@ bool MyPolygonUtility::IsOverlapping(const MyPoint2D& gridPoint, vector<MyPoint2
             angleA = angleB;
         }
     }
-    if (fabs(cumulativeAngle) > PI) // if absolute value of cumulative angle is > PI
+    if (fabs(cumulativeAngle) >= PI) // if absolute value of cumulative angle is >= PI
     {
         inside = true; // then point is inside polygon
     }
