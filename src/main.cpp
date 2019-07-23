@@ -573,7 +573,7 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
                         // Update shared wfipscells to origin map for current geodatabase
                         #pragma omp critical
                         {
-                            if (verbose & (fireIndex % 1000 == 0))
+                            if (verbose & (fireIndex % 10000 == 0))
                             {
                                 double currentPyromeProgress = (fireIndex / (fireMultiPolygons.size() * 1.0)) * 100.00;
                                 double totalProgress = (numPyromesProcessed / (numPyromes * 1.0)) * 100.00;
