@@ -439,9 +439,13 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
                 {
                     if(verbose)
                     {
-                        printf("Reading geometry data from table %s\n", currentPyromeName.c_str());
+                        printf("Reading geometry data into RAM from table\n%s\n", currentPyromeName.c_str());
                     }
                     ReadGeometryFromGDBTable(pyromeTable, wfipsData, fireMultiPolygons, fireBoundingBoxes, fireNumbers, fireOriginCells);
+                    if (verbose)
+                    {
+                        printf("Finished geometry data into RAM from table\n%s\n\n", currentPyromeName.c_str());
+                    }
                     // Close the table
                     if ((hr = geodatabase.CloseTable(pyromeTable)) != S_OK)
                     {
@@ -579,9 +583,9 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
                                 double totalProgress = (numPyromesProcessed / (numPyromes * 1.0)) * 100.00;
                                 long long int elapsedTimeInMicroseconds = std::chrono::microseconds(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startClock)).count();
 
-                                printf("%4.2f percent of pyrome %s\n    is complete\n", currentPyromeProgress, currentPyromeName.c_str());
+                                printf("%4.2f percent of pyrome %s\nis complete\n\n", currentPyromeProgress, currentPyromeName.c_str());
                                 printf("Processed %d pyromes out of %d\n", numPyromesProcessed, numPyromes);
-                                printf("%4.2f percent of all pyromes is complete\n", totalProgress);
+                                printf("%4.2f percent of all pyromes is complete\n\n", totalProgress);
                                 printf("Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
                             }
 
@@ -605,9 +609,9 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
                     {
                         double totalProgress = (numPyromesProcessed / (numPyromes * 1.0)) * 100.00;
                         long long int elapsedTimeInMicroseconds = std::chrono::microseconds(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - startClock)).count();
-                        printf("Processed %d pyromes out of %d in\n", numPyromesProcessed, numPyromes);
-                        printf("    %s\n    %4.2f percent of all pyromes to be processed are complete\n", gdbPath.c_str(), totalProgress);
-                        printf(" Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
+                        printf("Processed %d pyromes out of %d in\n%s\n", numPyromesProcessed, numPyromes);
+                        printf("%4.2f percent of all pyromes to be processed are complete\n", gdbPath.c_str(), totalProgress);
+                        printf("Total time elapsed is %4.2f seconds\n\n", elapsedTimeInMicroseconds / numMicrosecondsPerSecond);
                     }
 
 
@@ -745,13 +749,13 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData
     sqlite3_stmt *totalsStmt;
     char *sqlErrMsg = 0;
 
-    string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds " \
+    string createFireshedDBSQLString = "CREATE TABLE IF NOT EXISTS firesheds" \
         "(wfipscell INTEGER, " \
         "origin INTEGER, " \
         "num_pairs INTEGER)";
     
-    string insertFireshedsSQLString = "INSERT INTO firesheds(" \
-        "wfipscell, " \
+    string insertFireshedsSQLString = "INSERT INTO firesheds" \
+        "(wfipscell, " \
         "origin, " \
         "num_pairs) " \
         "VALUES " \
@@ -759,11 +763,12 @@ int CreateFireShedDB(const bool verbose, sqlite3* db, FireshedData& fireshedData
         ":origin, " \
         ":num_pairs)";
 
-    string createTotalFiresDBSQLString = "CREATE TABLE IF NOT EXISTS totals_for_origins " \
+    string createTotalFiresDBSQLString = "CREATE TABLE IF NOT EXISTS totals_for_origins" \
         "(origin INTEGER, " \
-        "total_fires INTEGER)";
+        "total_fires INTEGER, " \
+        "PRIMARY KEY(origin))";
 
-    string insertTotalsFiresSQLString = "INSERT INTO totals_for_origins " \
+    string insertTotalsFiresSQLString = "INSERT INTO totals_for_origins" \
         "(origin, " \
         "total_fires) " \
         "VALUES " \
