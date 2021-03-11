@@ -20,7 +20,8 @@ class WfipsData;
 enum WG_LAYER{
 	WGL_WFP = 0, WGL_AIR_TO_GROUND, WGL_DISC_SIZE, WGL_ESL_SIZE, WGL_ESL_TIME, WGL_FIRST_DELAY, WGL_EXCLUDED, WGL_PMP_ROLL_PERC,
 	WGL_WALK_IN_BOAT, WGL_WALK_IN_CREW, WGL_WALK_IN_ENG, WGL_WALK_IN_HELITACK, WGL_WALK_IN_SMKJMP,
-	WGL_WALK_IN_TRACKED, WGL_WALK_PERC, WGL_WATER_DROP, WGL_WILDERNESS, WGL_DISTROADS, WGL_EVACTIME, WGL_WUI, WGL_WATER, WGL_ELEC_GAS, WGL_END
+	WGL_WALK_IN_TRACKED, WGL_WALK_PERC, WGL_WATER_DROP, WGL_WILDERNESS, WGL_DISTROADS, WGL_EVACTIME, WGL_WUI, WGL_WATER, WGL_ELEC_GAS, 
+	WGL_EFFECTIVE_TREAT, WGL_END
 };
 
 
@@ -30,9 +31,9 @@ class CWfipsGridData
 public:
 	CWfipsGridData();
 	~CWfipsGridData();
-
 	bool WG_GetCellCoords(int cell, double *minX, double *minY, double *maxX, double *maxY);
-	const int WG_GetCellIndex(double x, double y);
+	int WG_GetCellIndex(double x, double y);
+	void WG_GetRowCol(int wfipsCell, int *row, int *col);
 	int GetWfipsCell(double lat, double lon, int WfipsSRS = 0);
 	int GetWfipsCellDirect(double lat, double lon);
 	int LoadData(const char* dataPath);
@@ -51,6 +52,7 @@ public:
 	double GetWest();
 	int GetWfipsCellIndex(int row, int col);
 	int GetRowColFromWfipsCell(int cell, int *row, int *col);
+	int GetWfipsCellCoords(int row, int col, int WfipsSRS, double *x, double *y);
 
 	int GetGridValueAsInt(WG_LAYER layer, int WfipsSRS, double lat, double lon);
 	float GetGridValueAsFloat(WG_LAYER layer, int WfipsSRS, double lat, double lon);
@@ -80,6 +82,7 @@ public:
 	int GetWilderness(double lat, double lon, int WfipsSRS = 0);
 	int GetGroungEvacTimeClass(double lat, double lon, int WfipsSRS = 0);
 	int GetWUIClass(double lat, double lon, int WfipsSRS = 0);
+	int GetEffectiveTreatment(double lat, double lon, int WfipsSRS = 0);
 
 	bool GetExcluded(int row, int col);
 	float GetAirToGround(int row, int col);
@@ -102,7 +105,7 @@ public:
 	int GetWilderness(int row, int col);
 	int GetGroungEvacTimeClass(int row, int col);
 	int GetWUIClass(int row, int col);
-
+	int GetEffectiveTreatment(int row, int col);
 
 	int GetDispatchValue(int dtIndex, double latitude, double longitude);
 	int GetDispatchValue(int dtIndex, int wfipsGridRow, int wfipsGridCol);
@@ -121,11 +124,13 @@ public:
 	vector<int> GetCellsMatching(WG_LAYER layer, int findVal);
 	CWfipsGrid *GetWfipsGrid();
 	CWfipsGrid *GetFwaGrid();
+
 private:
 	string m_strDataPath;
 	vector<CWfipsGrid *> m_WGgrids;
 	//string m_strExclusionGridName;
 	CWfipsGrid m_wgWfipscells;
+	CWfipsGrid m_TreatmentCells;
 	CWfipsGrid m_wgFwaGrid;
 	//WFIPSGrid main attributes
 	//-2361582.2785416999831796, 2264417.7214583000168204, 259071.7189354300498962, 3177071.7189354300498962
@@ -139,4 +144,3 @@ private:
 	const char* m_WGproj = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs";
 	double m_WGadfGeoTransform[6];
 };
-

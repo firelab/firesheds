@@ -2,6 +2,7 @@
 
 #include "gdal_priv.h"
 #include "ogrsf_frmts.h"
+#include "gdal_utils_priv.h"
 
 char *WGL_LAYERNAMES[WGL_END] =
 {
@@ -27,6 +28,7 @@ char *WGL_LAYERNAMES[WGL_END] =
 	"WUI",
 	"Water Presence",
 	"Electic/Gas",
+	"Effective Treatment",
 };
 
 char *WGL_FILENAMES[WGL_END] =
@@ -53,6 +55,7 @@ char *WGL_FILENAMES[WGL_END] =
 	"WUI_2km",
 	"water_2km",
 	"elecgas_2km",
+	"TreatNoTreat2_2km",
 };
 
 WFIPS_GRID_TYPE WGL_WG_TYPES[WGL_END] =
@@ -73,13 +76,13 @@ WFIPS_GRID_TYPE WGL_WG_TYPES[WGL_END] =
 	WGT_INT,
 	WGT_INT,
 	WGT_INT,
+	WGT_INT,
 	WGT_FLOAT,
-	WGT_FLOAT,
 	WGT_INT,
 	WGT_INT,
 	WGT_INT,
 	WGT_INT,
-
+	WGT_INT,
 };
 
 char *WGL_UNITS[WGL_END] =
@@ -106,6 +109,7 @@ char *WGL_UNITS[WGL_END] =
 	"Class",
 	"Class",
 	"Class",
+	"Class",
 };
 
 int WGL_DECIMALS[WGL_END] = 
@@ -128,6 +132,7 @@ int WGL_DECIMALS[WGL_END] =
 	0,
 	0,
 	2,
+	0,
 	0,
 	0,
 	0,
@@ -213,16 +218,42 @@ int CWfipsGridData::GetRowColFromWfipsCell(int cell, int *row, int *col)
 	return 0;
 }
 
+int CWfipsGridData::GetWfipsCellCoords(int row, int col, int WfipsSRS, double *x, double *y)
+{
+	int cell = GetWfipsCellIndex(row, col);
+	*x = *y = 0.0;
+	if (cell >= 0 && cell < m_WGnumCellsY * m_WGnumCellsX)
+	{
+		//want coordinates of centroid in selected srs
+		//need to use EPSG5070
+		*x = m_WGwest + col * m_WGres + m_WGres / 2.0;
+		*y = m_WGnorth - row * m_WGres - m_WGres / 2.0;
+		/*if (WfipsSRS != 1)//want coords in different SRS
+		{
+			double startX = *x, startY = *y;
+			m_wgWfipscells.GetCoordinateTransformation(0)->Transform(1, x, y);
+			*x = startX;
+			*y = startY;
+			m_wgWfipscells.GetCoordinateTransformation(1)->Transform(1, x, y);
+			*x = startX;
+			*y = startY;
+			m_wgWfipscells.GetCoordinateTransformation(2)->Transform(1, x, y);
+		}*/
+	}
+
+	return cell;
+}
+
 int CWfipsGridData::LoadData(const char* dataPath)
 {
 	m_strDataPath = dataPath;
 	string gridFileName;
 	gridFileName = m_strDataPath + "WFIPSgrid.tif";
 	int rc = m_wgWfipscells.LoadData(gridFileName, WGT_INT);
-    if (rc != 0)
-    {
-        return rc;
-    }
+	if(rc != 0)
+	{
+		return rc;
+	}
 	m_wgWfipscells.GetGeoTransform(m_WGadfGeoTransform);
 	//gridFileName = m_strDataPath + "\\fwa.tif";
 	//m_wgFwaGrid.LoadData(gridFileName, WGT_INT);
@@ -238,6 +269,15 @@ int CWfipsGridData::LoadData(const char* dataPath)
 	//		return -1;
 	//	}
 	//}
+
+	gridFileName = m_strDataPath + "TreatNoTreat2_2km.tif";
+	CWfipsGrid* pGrid = new CWfipsGrid();
+	rc = m_TreatmentCells.LoadData(gridFileName, WGT_INT);
+	if(rc != 0)
+	{
+		return rc;
+	}
+
 	return 0;
 }
 
@@ -284,7 +324,7 @@ int CWfipsGridData::GetWfipsCellDirect(double lat, double lon)
 	return m_wgWfipscells.CellValueDirectInt(lat, lon);
 }
 
-const int CWfipsGridData::WG_GetCellIndex(double x, double y)
+int CWfipsGridData::WG_GetCellIndex(double x, double y)
 {
 	int ret = -1;
 	if (x < m_WGwest || x > m_WGeast || y < m_WGsouth || y > m_WGnorth)
@@ -293,6 +333,13 @@ const int CWfipsGridData::WG_GetCellIndex(double x, double y)
 	int col = (int)((x - m_WGwest) / m_WGres);
 	int row = (int)((m_WGnorth - y) / m_WGres);
 	return row * m_WGnumCellsX + col;
+}
+
+void CWfipsGridData::WG_GetRowCol(int wfipsCell, int *row, int *col)
+{
+	*row = wfipsCell / m_WGnumCellsX;
+	*col = wfipsCell - (*row * m_WGnumCellsX);
+	//*col = wfipsCell % m_WGnumCellsX;
 }
 
 /*typedef struct
@@ -500,6 +547,15 @@ int CWfipsGridData::GetWUIClass(double lat, double lon, int WfipsSRS/* = 0*/)
 	return -9999;
 }
 
+int CWfipsGridData::GetEffectiveTreatment(double lat, double lon, int WfipsSRS/* = 0*/)
+{
+	if (m_WGgrids[WGL_EFFECTIVE_TREAT])
+	{
+		return m_WGgrids[WGL_EFFECTIVE_TREAT]->CellValueInt(WfipsSRS, lat, lon);
+	}
+	return -9999;
+}
+
 bool CWfipsGridData::GetExcluded(int row, int col)
 {
 	if (m_WGgrids[WGL_EXCLUDED])
@@ -687,6 +743,11 @@ int CWfipsGridData::GetWUIClass(int row, int col)
 		return m_WGgrids[WGL_WUI]->CellValueInt(row, col);
 	}
 	return -9999;
+}
+
+int CWfipsGridData::GetEffectiveTreatment(int row, int col)
+{
+	return m_TreatmentCells.CellValueInt(row, col);
 }
 
 int CWfipsGridData::GetGridValueAsInt(WG_LAYER layer, int WfipsSRS, double lat, double lon)

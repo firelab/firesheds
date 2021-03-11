@@ -15,7 +15,7 @@ CWfipsGrid::CWfipsGrid()
 	m_fVals = NULL;
 	m_iVals = NULL;
 	m_wfipsCT[0] = m_wfipsCT[1] = m_wfipsCT[2] = NULL;
-	//InitializeCriticalSection(&TransformCS);
+	InitializeCriticalSection(&TransformCS);
 }
 
 
@@ -33,7 +33,7 @@ CWfipsGrid::~CWfipsGrid()
 		OGRCoordinateTransformation::DestroyCT(m_wfipsCT[1]);
 	if (m_wfipsCT[2])
 		OGRCoordinateTransformation::DestroyCT(m_wfipsCT[2]);
-	//DeleteCriticalSection(&TransformCS);
+	DeleteCriticalSection(&TransformCS);
 
 }
 
@@ -239,11 +239,11 @@ int CWfipsGrid::LoadData(string fileName, WFIPS_GRID_TYPE gridType)
 	}
 	CPLFree(panScanline);
 	err = m_wfipsSRS[0].SetWellKnownGeogCS("NAD83");
-    CPLStringList papszPrj5070;;
+	CPLStringList papszPrj5070; // = NULL;
 	papszPrj5070.AddString(MapESRIProjStrings[1]);
 	err = m_wfipsSRS[1].importFromESRI(papszPrj5070);
 	//err = m_wfipsSRS[1].SetWellKnownGeogCS("EPSG:5070");
-    CPLStringList papszPrj3857;
+	CPLStringList papszPrj3857; // = NULL;
 	papszPrj3857.AddString(MapESRIProjStrings[2]);
 	err = m_wfipsSRS[2].importFromESRI(papszPrj3857);
 
@@ -362,14 +362,16 @@ bool CWfipsGrid::Create(WFIPS_GRID_TYPE gridType, int numRows, int numCols, doub
 	m_dNodataVal = ndValue;
 
 	int err = m_wfipsSRS[0].SetWellKnownGeogCS("NAD83");
-	CPLStringList papszPrj5070;
+	CPLStringList papszPrj5070; // = NULL;
 	papszPrj5070.AddString(MapESRIProjStrings[1]);
 	err = m_wfipsSRS[1].importFromESRI(papszPrj5070);
 	//err = m_wfipsSRS[1].SetWellKnownGeogCS("EPSG:5070");
-	CPLStringList papszPrj3857;
+	CPLStringList papszPrj3857; // = NULL;
 	papszPrj3857.AddString(MapESRIProjStrings[2]);
 	err = m_wfipsSRS[2].importFromESRI(papszPrj3857);
 	//err = m_wfipsSRS[2].SetWellKnownGeogCS("EPSG:3857");
+	papszPrj5070; // = NULL;
+	papszPrj5070.AddString(MapESRIProjStrings[1]);
 	err = m_oSrcSRS.importFromESRI(papszPrj5070);
 	//coordinate transformations
 	m_wfipsCT[0] = OGRCreateCoordinateTransformation(&m_wfipsSRS[0], &m_oSrcSRS);
@@ -396,7 +398,7 @@ double CWfipsGrid::GetNoDataVal()
 
 bool CWfipsGrid::CellValueBool(int row, int col)
 {
-    long long int loc = row * m_nCols + col;
+	long long int loc = row * m_nCols + col;
 	if (loc >= 0 && loc < m_nCols * m_nRows && m_bVals != NULL)
 		return m_bVals[loc];
 	return false;
@@ -404,7 +406,7 @@ bool CWfipsGrid::CellValueBool(int row, int col)
 
 float CWfipsGrid::CellValueFloat(int row, int col)
 {
-    long long int loc = row * m_nCols + col;
+	long long int loc = row * m_nCols + col;
 	if (loc >= 0 && loc < m_nCols * m_nRows && m_fVals != NULL)
 		return m_fVals[loc];
 	return m_dNodataVal;
@@ -412,7 +414,7 @@ float CWfipsGrid::CellValueFloat(int row, int col)
 
 int CWfipsGrid::CellValueInt(int row, int col)
 {
-    long long int loc = row * m_nCols + col;
+	long long int loc = row * m_nCols + col;
 	if (loc >= 0 && loc < m_nCols * m_nRows && m_iVals != NULL)
 		return m_iVals[loc];
 	return m_dNodataVal;
@@ -495,7 +497,7 @@ int CWfipsGrid::CellValueDirectFloat(double lat, double lon)
 
 bool CWfipsGrid::SetCellValue(int WfipsSRS, double lat, double lon, bool val)
 {
-    long long int loc = CellIndex(WfipsSRS, lat, lon);
+	long long int loc = CellIndex(WfipsSRS, lat, lon);
 	if (loc >= 0 && loc < m_nRows * m_nCols)
 	{//	set appropriate data array value
 		switch (m_gridType)
@@ -514,7 +516,7 @@ bool CWfipsGrid::SetCellValue(int WfipsSRS, double lat, double lon, bool val)
 
 bool CWfipsGrid::SetCellValue(int WfipsSRS, double lat, double lon, int val)
 {
-    long long int loc = CellIndex(WfipsSRS, lat, lon);
+	long long int loc = CellIndex(WfipsSRS, lat, lon);
 	if (loc >= 0 && loc < m_nRows * m_nCols)
 	{//	set appropriate data array value
 		switch (m_gridType)
@@ -533,7 +535,7 @@ bool CWfipsGrid::SetCellValue(int WfipsSRS, double lat, double lon, int val)
 
 bool CWfipsGrid::SetCellValue(int WfipsSRS, double lat, double lon, float val)
 {
-    long long int loc = CellIndex(WfipsSRS, lat, lon);
+	long long int loc = CellIndex(WfipsSRS, lat, lon);
 	if (loc >= 0 && loc < m_nRows * m_nCols)
 	{//	set appropriate data array value
 		switch (m_gridType)
@@ -552,7 +554,7 @@ bool CWfipsGrid::SetCellValue(int WfipsSRS, double lat, double lon, float val)
 
 bool CWfipsGrid::SetCellValue(int row, int col, bool val)
 {
-    long long int loc = row * m_nCols + col;
+	long long int loc = row * m_nCols + col;
 	if (loc >= 0 && loc < m_nCols * m_nRows && m_bVals != NULL)
 		m_bVals[loc] = val;
 	return false;
@@ -560,7 +562,7 @@ bool CWfipsGrid::SetCellValue(int row, int col, bool val)
 
 bool CWfipsGrid::SetCellValue(int row, int col, int val)
 {
-    long long int loc = row * m_nCols + col;
+	long long int loc = row * m_nCols + col;
 	if (loc >= 0 && loc < m_nCols * m_nRows && m_iVals != NULL)
 		m_iVals[loc] = val;
 	return false;
@@ -568,7 +570,7 @@ bool CWfipsGrid::SetCellValue(int row, int col, int val)
 
 bool CWfipsGrid::SetCellValue(int row, int col, float val)
 {
-    long long int loc = row * m_nCols + col;
+	long long int loc = row * m_nCols + col;
 	if (loc >= 0 && loc < m_nCols * m_nRows && m_fVals != NULL)
 		m_fVals[loc] = val;
 	return false;
@@ -626,9 +628,9 @@ long long int CWfipsGrid::CellIndex(int WfipsSRS, double lat, double lon)
 		return -3;
 	}
 	double x = lon, y = lat;
-	//EnterCriticalSection(&TransformCS);
+	EnterCriticalSection(&TransformCS);
 	m_wfipsCT[WfipsSRS]->Transform(1, &x, &y);
-	//LeaveCriticalSection(&TransformCS);
+	LeaveCriticalSection(&TransformCS);
 	int nCol = (int)(m_adfInvGeoTransform[0] + m_adfInvGeoTransform[1] *
 		x + m_adfInvGeoTransform[2] * y);
 	int nRow = (int)(m_adfInvGeoTransform[3] + m_adfInvGeoTransform[4] *
@@ -641,7 +643,7 @@ long long int CWfipsGrid::CellIndex(int WfipsSRS, double lat, double lon)
 
 bool CWfipsGrid::CellValueBool(int WfipsSRS, double lat, double lon)
 {
-    long long int loc = CellIndex(WfipsSRS, lat, lon);
+	long long int loc = CellIndex(WfipsSRS, lat, lon);
 	if (loc >= 0 && loc < m_nRows * m_nCols)
 	{//	return m_bVals[loc];
 		switch (m_gridType)
@@ -659,7 +661,7 @@ bool CWfipsGrid::CellValueBool(int WfipsSRS, double lat, double lon)
 
 float CWfipsGrid::CellValueFloat(int WfipsSRS, double lat, double lon)
 {
-    long long int loc = CellIndex(WfipsSRS, lat, lon);
+	long long int loc = CellIndex(WfipsSRS, lat, lon);
 	if (loc >= 0 && loc < m_nRows * m_nCols)
 	{//	return m_bVals[loc];
 		switch (m_gridType)
@@ -677,7 +679,7 @@ float CWfipsGrid::CellValueFloat(int WfipsSRS, double lat, double lon)
 
 int CWfipsGrid::CellValueInt(int WfipsSRS, double lat, double lon)
 {
-    long long int loc = CellIndex(WfipsSRS, lat, lon);
+	long long int loc = CellIndex(WfipsSRS, lat, lon);
 	if (loc >= 0 && loc < m_nRows * m_nCols)
 	{
 		switch (m_gridType)
@@ -696,4 +698,9 @@ int CWfipsGrid::CellValueInt(int WfipsSRS, double lat, double lon)
 OGRCoordinateTransformation *CWfipsGrid::GetCoordinateTransformation(int SRS)
 {
 	return m_wfipsCT[SRS];
+}
+
+OGRSpatialReference *CWfipsGrid::GetSRS(int wfipsSRS)
+{
+	return &m_wfipsSRS[wfipsSRS];
 }

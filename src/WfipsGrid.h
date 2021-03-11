@@ -3,6 +3,7 @@
 #include <string>
 #include "gdal_priv.h"
 #include "ogr_spatialref.h"
+#include <Windows.h>
 
 using namespace std;
 
@@ -23,13 +24,9 @@ public:
 	float CellValueFloat(int row, int col);
 	int CellValueInt(int row, int col);
 
-    int WG_GetCellIndex(double x, double y);
-
 	int CellValueDirectInt(double lat, double lon);
 	int CellValueDirectBool(double lat, double lon);
 	int CellValueDirectFloat(double lat, double lon);
-
-
 
 	bool SetCellValue(int WfipsSRS, double lat, double lon, bool val);
 	bool SetCellValue(int WfipsSRS, double lat, double lon, int val);
@@ -47,7 +44,7 @@ public:
 	bool GetGeoTransform(double *pTargetTransform);
 	bool SaveAs(string outfileName);
 	OGRCoordinateTransformation *GetCoordinateTransformation(int SRS);
-    OGRSpatialReference *GetConusAlbersSRS();
+	OGRSpatialReference *GetSRS(int wfipsSRS);
 private:
 	long long int CellIndex(int WfipsSRS, double lat, double lon);
 	//int GetWfipsGeotransform(double *pAdfGeoTransform);
@@ -57,9 +54,8 @@ private:
 	bool *m_bVals;
 	float *m_fVals;
 	int *m_iVals;
-    int *m_iMemVals;
 	int m_nRows;
-    int m_nCols;
+	int m_nCols;
 	double m_minX;
 	double m_maxX;
 	double m_minY;
@@ -75,7 +71,5 @@ private:
 	//coordinate transformations for the three WFIPS view settings
 	OGRSpatialReference m_wfipsSRS[3];
 	OGRCoordinateTransformation *m_wfipsCT[3];
-	//CRITICAL_SECTION TransformCS;
-
+	CRITICAL_SECTION TransformCS;
 };
-
