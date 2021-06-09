@@ -369,7 +369,11 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
     fgdbError hr;
 
     int numThreads = 1;
-    int availableThreads = omp_get_num_procs() - 1;
+    int availableThreads = -1;
+
+#ifdef _OPENMP
+    availableThreads = omp_get_num_procs() - 1;
+#endif // _OPENMP
 
     if(availableThreads < 1)
     {
@@ -392,7 +396,9 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
         }
     }
 
+#ifdef _OPENMP
     omp_set_num_threads(numThreads);
+#endif // _OPENMP
 
     volatile int numPyromesProcessed = 0;
 
@@ -487,7 +493,9 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
 
                     unordered_multimap<int, int> tempTotalWfipscellsToFireOrigins;
 
+#ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic, 1) shared(numPyromesProcessed)
+#endif // _OPENMP
                     for(int fireIndex = 0; fireIndex < fireProperties.size(); fireIndex++)
                     {
                         int fireNumber = fireProperties[fireIndex].fireNumber;
@@ -612,8 +620,10 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
                         }
 
                         // Update shared wfipscells to origin map for current geodatabase
+#ifdef _OPENMP
 #pragma omp critical
                         {
+#endif // _OPENMP
                             if(verbose && (fireIndex % 10000 == 0))
                             {
                                 double currentPyromeProgress = (fireIndex / (fireProperties.size() * 1.0)) * 100.00;
@@ -632,16 +642,22 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
                                 // origin is the same for all pairs in current fire
                                 fireshedData.wfipscellsToFireOriginsMultimapForEachGDB[gdbIndex].insert(std::make_pair(wfipsCell, origin));
                             }
+#ifdef _OPENMP
                         }
+#endif // _OPENMP
                         // Clear list of cells burned by current fire for next loop iteration
                         tempSingleFireWfipscellsToFireOrigins.clear();
                     }
 
+#ifdef _OPENMP
 #pragma omp atomic
+#endif // _OPENMP
                     numPyromesProcessed++;
 
+#ifdef _OPENMP
 #pragma omp critical
                     {
+#endif // _OPENMP
                         if(verbose)
                         {
                             double totalProgress = (numPyromesProcessed / (numPyromes * 1.0)) * 100.00;
@@ -652,7 +668,9 @@ int FindCellOriginPairsInRAM(const int numThreadsArg, const bool verbose, const 
                         }
 
                         tempTotalWfipscellsToFireOrigins.clear();
+#ifdef _OPENMP
                     }
+#endif // _OPENMP
                 }
             }
 

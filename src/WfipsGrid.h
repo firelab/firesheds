@@ -3,7 +3,6 @@
 #include <string>
 #include "gdal_priv.h"
 #include "ogr_spatialref.h"
-#include <Windows.h>
 
 using namespace std;
 
@@ -71,5 +70,4 @@ private:
 	//coordinate transformations for the three WFIPS view settings
 	OGRSpatialReference m_wfipsSRS[3];
 	OGRCoordinateTransformation *m_wfipsCT[3];
-	CRITICAL_SECTION TransformCS;
 };

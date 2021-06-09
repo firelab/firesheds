@@ -15,7 +15,6 @@ CWfipsGrid::CWfipsGrid()
 	m_fVals = NULL;
 	m_iVals = NULL;
 	m_wfipsCT[0] = m_wfipsCT[1] = m_wfipsCT[2] = NULL;
-	InitializeCriticalSection(&TransformCS);
 }
 
 
@@ -33,7 +32,6 @@ CWfipsGrid::~CWfipsGrid()
 		OGRCoordinateTransformation::DestroyCT(m_wfipsCT[1]);
 	if (m_wfipsCT[2])
 		OGRCoordinateTransformation::DestroyCT(m_wfipsCT[2]);
-	DeleteCriticalSection(&TransformCS);
 
 }
 
@@ -96,7 +94,6 @@ int CWfipsGrid::LoadData(string fileName, WFIPS_GRID_TYPE gridType)
 		default:
 			m_gridType = WGT_INT;
 			break;
-
 		}
 	}
 	switch (m_gridType)
@@ -628,9 +625,16 @@ long long int CWfipsGrid::CellIndex(int WfipsSRS, double lat, double lon)
 		return -3;
 	}
 	double x = lon, y = lat;
-	EnterCriticalSection(&TransformCS);
-	m_wfipsCT[WfipsSRS]->Transform(1, &x, &y);
-	LeaveCriticalSection(&TransformCS);
+
+#ifdef _OPENMP
+#pragma omp critical
+	{
+#endif // _OPENMP
+		m_wfipsCT[WfipsSRS]->Transform(1, &x, &y);
+#ifdef _OPENMP
+	}
+#endif // _OPENMP
+
 	int nCol = (int)(m_adfInvGeoTransform[0] + m_adfInvGeoTransform[1] *
 		x + m_adfInvGeoTransform[2] * y);
 	int nRow = (int)(m_adfInvGeoTransform[3] + m_adfInvGeoTransform[4] *
