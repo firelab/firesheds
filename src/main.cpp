@@ -311,11 +311,11 @@ int main(int argc, char* argv[])
         printf("Loading WFIPS data\n");
     }
 
-    rc = FillWfipsData(wfipsData, dataPath);
+    rc = FillWfipsData(wfipsData, gridPath);
     if(rc != SUCCESS)
     {
         printf("Error: WFIPS data loading failed\n");
-        printf("Make sure the files\n    \"WFIPSGrid.tif\"\n    \"TreatNoTreat2_2km.tif.tif\"\nexist in\n    %s\n\n", dataPath.c_str());
+        printf("Make sure the files\n    \"WFIPSGrid.tif\"\n    \"TreatNoTreat2_2km.tif.tif\"\nexist in\n    %s\n\n", gridPath.c_str());
         return EXIT_FAILURE;
     }
     else if(verbose)
